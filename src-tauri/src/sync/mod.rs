@@ -46,8 +46,6 @@ use protocol::{
 const PAIR_PENDING_TTL_SECS: u64 = 120;
 /// 发起方轮询配对结果的总时长（秒）。
 const PAIR_POLL_TIMEOUT_SECS: u64 = 150;
-/// 发起方轮询间隔。
-const PAIR_POLL_INTERVAL: Duration = Duration::from_secs(2);
 /// 同一设备两次 pull 的最小间隔（mDNS 反复 Resolved 时节流）。
 const PULL_THROTTLE: Duration = Duration::from_secs(30);
 /// 同步 identity 文件名（config 目录下）。
@@ -398,7 +396,6 @@ impl SyncManager {
                 last_address: address,
                 last_pull_at: None,
                 created_at: now,
-                updated_at: now,
             };
             let pool = devices::pool(app).await;
             devices::upsert_device(&pool, &record).await?;
@@ -480,7 +477,6 @@ impl SyncManager {
             last_address: Some(entry.address.clone()),
             last_pull_at: None,
             created_at: now,
-            updated_at: now,
         };
         let pool = devices::pool(app).await;
         devices::upsert_device(&pool, &record).await?;

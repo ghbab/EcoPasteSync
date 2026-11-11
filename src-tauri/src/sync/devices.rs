@@ -25,11 +25,10 @@ pub struct SyncDeviceRecord {
     /// 最近一次 pull 游标（对端返回条目的最大 created_at）。
     pub last_pull_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
 }
 
 const SELECT_DEVICE: &str = "SELECT device_id, name, platform, shared_key, allow_send, \
-     allow_receive, last_seen_at, last_address, last_pull_at, created_at, updated_at \
+     allow_receive, last_seen_at, last_address, last_pull_at, created_at \
      FROM sync_devices";
 
 /// platform 列以小写字符串存储，与 `clipboard_items.platform` 同一约定。
@@ -253,7 +252,6 @@ struct RawDeviceRow {
     last_address: Option<String>,
     last_pull_at: Option<DateTime<Utc>>,
     created_at: DateTime<Utc>,
-    updated_at: DateTime<Utc>,
 }
 
 impl RawDeviceRow {
@@ -269,7 +267,6 @@ impl RawDeviceRow {
             last_address: self.last_address,
             last_pull_at: self.last_pull_at,
             created_at: self.created_at,
-            updated_at: self.updated_at,
         }
     }
 }
@@ -299,7 +296,6 @@ mod tests {
             last_address: Some("192.168.1.20:39782".to_owned()),
             last_pull_at: None,
             created_at: now,
-            updated_at: now,
         }
     }
 
