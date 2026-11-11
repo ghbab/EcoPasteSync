@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.2.0](https://github.com/EcoPasteHub/EcoPaste/compare/v1.1.0...v1.2.0) (2026-11-11)
+
+### ✨ Features
+
+* add LAN clipboard sync between paired devices (mDNS discovery, encrypted transport, per-device send/receive permissions, device blacklist)
+* add sync preferences with per-type switches for text, image, and file records
+* add Windows portable zip to release artifacts
+
 ## [1.1.0](https://github.com/EcoPasteHub/EcoPaste/compare/v1.0.0...v1.1.0) (2026-07-22)
 
 ### ✨ Features

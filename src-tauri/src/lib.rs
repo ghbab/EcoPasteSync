@@ -15,6 +15,7 @@ mod menu;
 mod mouse;
 mod settings;
 mod shortcut;
+mod sync;
 mod tray;
 mod update;
 mod window;
@@ -163,6 +164,14 @@ pub fn run() {
             commands::resume_global_shortcuts,
             commands::update_settings,
             commands::reset_settings,
+            commands::get_sync_state,
+            commands::request_sync_pair,
+            commands::respond_sync_pair,
+            commands::remove_sync_device,
+            commands::rename_sync_device,
+            commands::set_sync_device_permissions,
+            commands::set_sync_device_blocked,
+            commands::refresh_sync_devices,
             commands::export_history_backup,
             commands::inspect_history_backup,
             commands::take_pending_backup,
@@ -214,6 +223,11 @@ pub fn run() {
                 })?;
                 handle_db.manage(db::DatabaseState::new(pool));
                 clipboard::init(&handle_db)?;
+
+                // 数据库就绪后初始化局域网同步（按设置决定是否启动服务）。
+                if let Err(err) = sync::init(&handle_db) {
+                    log::error!("sync initialization failed: {err:?}");
+                }
                 Ok::<_, anyhow::Error>(())
             })?;
 

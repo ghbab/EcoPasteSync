@@ -10,6 +10,7 @@ mod link;
 mod onboarding;
 mod settings;
 mod storage;
+mod sync;
 pub mod update;
 mod window;
 
@@ -25,5 +26,6 @@ pub use link::*;
 pub use onboarding::*;
 pub use settings::*;
 pub use storage::*;
+pub use sync::*;
 pub use update::*;
 pub use window::*;

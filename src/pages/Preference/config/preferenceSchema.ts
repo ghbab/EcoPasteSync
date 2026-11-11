@@ -873,6 +873,108 @@ export const preferenceTabs: PreferenceTab[] = [
     ],
   },
   {
+    icon: "i-lucide:lan",
+    id: "sync",
+    sections: [
+      {
+        id: "syncGeneral",
+        settings: [
+          {
+            control: { type: "switch" },
+            id: "sync.enabled",
+            keywords: ["sync", "lan", "network", "device", "pair"],
+            path: ["sync", "enabled"],
+            value: (settings) => {
+              return settings.sync.enabled;
+            },
+          },
+          {
+            control: { type: "text" },
+            disabledWhen: (settings) => {
+              return !settings.sync.enabled;
+            },
+            id: "sync.deviceName",
+            keywords: ["sync", "device", "name", "hostname"],
+            parentId: "sync.enabled",
+            path: ["sync", "deviceName"],
+            value: (settings) => {
+              return settings.sync.deviceName;
+            },
+          },
+          {
+            control: { max: 65535, min: 1024, type: "number" },
+            disabledWhen: (settings) => {
+              return !settings.sync.enabled;
+            },
+            id: "sync.port",
+            keywords: ["sync", "port", "network", "lan"],
+            parentId: "sync.enabled",
+            path: ["sync", "port"],
+            value: (settings) => {
+              return settings.sync.port;
+            },
+          },
+          {
+            control: { type: "switch" },
+            disabledWhen: (settings) => {
+              return !settings.sync.enabled;
+            },
+            id: "sync.syncText",
+            keywords: ["sync", "text", "content"],
+            parentId: "sync.enabled",
+            path: ["sync", "syncText"],
+            value: (settings) => {
+              return settings.sync.syncText;
+            },
+          },
+          {
+            control: { type: "switch" },
+            disabledWhen: (settings) => {
+              return !settings.sync.enabled;
+            },
+            id: "sync.syncImage",
+            keywords: ["sync", "image", "picture", "content"],
+            parentId: "sync.enabled",
+            path: ["sync", "syncImage"],
+            value: (settings) => {
+              return settings.sync.syncImage;
+            },
+          },
+          {
+            control: { type: "switch" },
+            disabledWhen: (settings) => {
+              return !settings.sync.enabled;
+            },
+            id: "sync.syncFiles",
+            keywords: ["sync", "file", "path", "content"],
+            parentId: "sync.enabled",
+            path: ["sync", "syncFiles"],
+            value: (settings) => {
+              return settings.sync.syncFiles;
+            },
+          },
+        ],
+      },
+      {
+        id: "syncDevices",
+        settings: [
+          {
+            control: { key: "sync.devices", type: "syncDevices" },
+            id: "sync.devices",
+            keywords: [
+              "sync",
+              "device",
+              "pair",
+              "nearby",
+              "blocklist",
+              "trust",
+            ],
+          },
+        ],
+      },
+    ],
+  },
+  {
     icon: "i-lucide:info",
     id: "about",
     sections: [

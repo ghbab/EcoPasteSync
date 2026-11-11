@@ -25,6 +25,7 @@ import ShortcutTagsControl from "./ShortcutTagsControl";
 import SortableCheckboxTreeControl from "./SortableCheckboxTreeControl";
 import StatusControl from "./StatusControl";
 import SwitchControl from "./SwitchControl";
+import SyncDevicesControl from "./SyncDevicesControl";
 import TextareaControl from "./TextareaControl";
 import TextControl from "./TextControl";
 
@@ -178,6 +179,8 @@ const PreferenceSettingControl: FC<PreferenceSettingControlProps> = (props) => {
           value={Array.isArray(value) ? value : []}
         />
       );
+    case "syncDevices":
+      return <SyncDevicesControl />;
     case "action":
       return (
         <ActionControl

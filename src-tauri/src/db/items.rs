@@ -100,6 +100,27 @@ pub async fn find_item_by_content_hash(
     Ok(item)
 }
 
+/// 同步 pull 场景：返回 `since` 之后（未指定则最近 `limit` 条）的完整条目，按时间升序。
+/// 与列表精简查询不同，这里必须带全量 `content` / `search_text`（对端要完整入库）。
+pub async fn list_recent_items_for_sync(
+    pool: &SqlitePool,
+    since: Option<DateTime<Utc>>,
+    limit: i64,
+) -> Result<Vec<ClipboardItem>> {
+    let mut qb: QueryBuilder<Sqlite> = QueryBuilder::new(SELECT_ITEM);
+    if let Some(since) = since {
+        qb.push(" WHERE created_at > ").push_bind(since);
+    }
+    qb.push(" ORDER BY created_at DESC LIMIT ").push_bind(limit);
+
+    let rows = qb
+        .build_query_as::<ClipboardItem>()
+        .fetch_all(pool)
+        .await
+        .context("failed to list recent clipboard items for sync")?;
+    Ok(rows.into_iter().rev().collect())
+}
+
 /// 插入一条剪贴板记录（不做去重；去重请走 [`upsert_item`]）。
 pub async fn insert_item(pool: &SqlitePool, item: &ClipboardItem) -> Result<()> {
     sqlx::query(

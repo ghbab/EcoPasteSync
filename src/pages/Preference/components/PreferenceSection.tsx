@@ -17,6 +17,7 @@ import { translatePreferenceSection } from "../utils/preferenceI18n";
 import PreferenceCountTag from "./PreferenceCountTag";
 import PreferenceSettingRow from "./PreferenceSettingRow";
 import SourceAppsTransfer from "./SourceAppsTransfer";
+import SyncDevicesControl from "./settingControls/SyncDevicesControl";
 
 interface PreferenceSectionProps {
   highlightedSettingId: string | null;
@@ -56,6 +57,7 @@ const PreferenceSection: FC<PreferenceSectionProps> = (props) => {
   } = props;
   const visual = resolveSectionVisual(section.id);
   const sourceAppsSettings = resolveSourceAppsSettings(section.settings);
+  const syncDevicesSetting = resolveSyncDevicesSetting(section.settings);
 
   if (sourceAppsSettings) {
     return (
@@ -107,23 +109,27 @@ const PreferenceSection: FC<PreferenceSectionProps> = (props) => {
         </PreferenceCountTag>
       </div>
 
-      <div>
-        {section.settings.map((setting) => {
-          return (
-            <PreferenceSettingRow
-              highlighted={setting.id === highlightedSettingId}
-              highlightToken={highlightToken}
-              key={setting.id}
-              onActionComplete={onActionComplete}
-              onChange={onChange}
-              setting={setting}
-              settings={settings}
-              shouldReduceMotion={shouldReduceMotion}
-              storageLocation={storageLocation}
-            />
-          );
-        })}
-      </div>
+      {syncDevicesSetting ? (
+        <SyncDevicesControl />
+      ) : (
+        <div>
+          {section.settings.map((setting) => {
+            return (
+              <PreferenceSettingRow
+                highlighted={setting.id === highlightedSettingId}
+                highlightToken={highlightToken}
+                key={setting.id}
+                onActionComplete={onActionComplete}
+                onChange={onChange}
+                setting={setting}
+                settings={settings}
+                shouldReduceMotion={shouldReduceMotion}
+                storageLocation={storageLocation}
+              />
+            );
+          })}
+        </div>
+      )}
     </motion.section>
   );
 };
@@ -242,6 +248,12 @@ function resolveSectionVisual(id: string): SectionVisual {
     };
   }
 
+  if (normalizedId.includes("sync")) {
+    return {
+      icon: "i-lucide:lan",
+    };
+  }
+
   return {
     icon: "i-lucide:clipboard-list",
   };
@@ -258,4 +270,15 @@ function resolveSourceAppsSettings(settings: PreferenceSetting[]) {
   if (!excludedApps) return null;
 
   return { excludedApps };
+}
+
+/**
+ * 识别设备管理分组所需的设置项；该控件需要整块宽度，走专属渲染分支。
+ */
+function resolveSyncDevicesSetting(settings: PreferenceSetting[]) {
+  return (
+    settings.find((setting) => {
+      return setting.control.type === "syncDevices";
+    }) ?? null
+  );
 }

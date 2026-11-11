@@ -152,6 +152,12 @@ pub async fn persist_and_notify(
     ) {
         log::warn!("emit {CLIPBOARD_UPDATED_EVENT} failed: {err}");
     }
+
+    // 新条目（非去重命中）才向局域网已配对设备推送；同步接收路径不经过本函数，无回环。
+    if !result.deduplicated {
+        crate::sync::maybe_broadcast_item(app, &item_to_write).await;
+    }
+
     Ok(result)
 }
 

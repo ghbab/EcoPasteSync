@@ -132,6 +132,12 @@
       "source": {
         "title": "App Filters"
       },
+      "syncDevices": {
+        "title": "Device Management"
+      },
+      "syncGeneral": {
+        "title": "General"
+      },
       "updates": {
         "title": "Updates"
       },
@@ -558,6 +564,66 @@
           "title": "Ignored Apps"
         }
       },
+      "sync": {
+        "deviceName": {
+          "description": "Device name shown to other devices on the LAN.",
+          "placeholder": "Uses the hostname when left empty",
+          "title": "Device Name"
+        },
+        "devices": {
+          "blockedTitle": "Ignored Devices",
+          "description": "Manage nearby, paired, and ignored devices.",
+          "disabledHint": "Nearby devices will appear here once LAN sync is enabled",
+          "emptyBlocked": "No ignored devices",
+          "emptyNearby": "No nearby devices",
+          "emptyPaired": "No paired devices",
+          "localDeviceName": "This device: {{name}}",
+          "nearbyTitle": "Nearby Devices",
+          "offline": "Offline",
+          "online": "Online",
+          "pair": "Pair",
+          "pairedTitle": "Paired Devices",
+          "pairFailed": {
+            "device-offline": "Device is offline",
+            "internal-error": "Internal error",
+            "network-error": "Network error",
+            "pair-rejected": "The other device rejected the pairing request",
+            "timeout": "Pairing timed out"
+          },
+          "pairRequestAccept": "Allow",
+          "pairRequestContent": "Device \"{{name}}\" ({{platform}}) wants to sync the clipboard with this device",
+          "pairRequestTitle": "Pairing Request",
+          "pairSuccess": "Paired successfully",
+          "receive": "Receive",
+          "refresh": "Refresh nearby devices",
+          "rename": "Rename",
+          "send": "Send",
+          "title": "Device Management",
+          "unblock": "Unignore",
+          "unpair": "Unpair",
+          "unpairConfirm": "After unpairing, this device will no longer be able to sync the clipboard with this device."
+        },
+        "enabled": {
+          "description": "Pair with EcoPaste devices on the same LAN and sync the clipboard.",
+          "title": "Enable LAN Sync"
+        },
+        "port": {
+          "description": "Port used by the sync service; later ports are tried when occupied.",
+          "title": "Sync Port"
+        },
+        "syncFiles": {
+          "description": "File-path entries join LAN sync; only the path reference is synced.",
+          "title": "Sync File Paths"
+        },
+        "syncImage": {
+          "description": "Images join LAN sync.",
+          "title": "Sync Images"
+        },
+        "syncText": {
+          "description": "Text content (links, HTML, RTF) joins LAN sync.",
+          "title": "Sync Text"
+        }
+      },
       "updates": {
         "autoCheck": {
           "description": "Periodically check whether a new EcoPaste version is available.",
@@ -652,6 +718,9 @@
       },
       "shortcuts": {
         "title": "Shortcuts"
+      },
+      "sync": {
+        "title": "Sync"
       },
       "workflow": {
         "title": "Interface"

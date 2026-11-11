@@ -289,6 +289,52 @@ export interface OnboardingLegacyImportResult {
   skipped: number;
 }
 
+export interface NearbyDevice {
+  deviceId: string;
+  name: string;
+  platform: string;
+  address: string;
+}
+
+export interface PairedDevice {
+  deviceId: string;
+  name: string;
+  platform: string;
+  allowSend: boolean;
+  allowReceive: boolean;
+  online: boolean;
+  lastSeenAt: string | null;
+  lastPullAt: string | null;
+}
+
+export interface BlockedDevice {
+  deviceId: string;
+  name: string | null;
+  platform: string | null;
+}
+
+export interface SyncState {
+  enabled: boolean;
+  deviceId: string;
+  deviceName: string;
+  port: number;
+  nearby: NearbyDevice[];
+  paired: PairedDevice[];
+  blocked: BlockedDevice[];
+}
+
+export interface SyncPairRequestPayload {
+  deviceId: string;
+  name: string;
+  platform: string;
+}
+
+export interface SyncPairResultPayload {
+  deviceId: string;
+  accepted: boolean;
+  reason: string | null;
+}
+
 /**
  * 把任意 invoke reject 的值归一化成前端可展示的 `AppError`。
  */
@@ -1477,4 +1523,91 @@ export const hideContextMenus = async () => {
   } catch (error) {
     log.error("hide context menus failed", toAppError(error));
   }
+};
+
+/**
+ * 拉取局域网同步状态快照：附近设备、已配对设备、黑名单与本机标识。
+ */
+export const getSyncState = () => {
+  return call<SyncState>(
+    TAURI_COMMAND.GET_SYNC_STATE,
+    "commands:labels.loadSyncState",
+  );
+};
+
+/**
+ * 向附近设备发起配对；结果经 `sync://pair-result` 事件异步返回。
+ */
+export const requestSyncPair = (deviceId: string) => {
+  return call<void>(TAURI_COMMAND.REQUEST_SYNC_PAIR, "commands:labels.requestPair", {
+    deviceId,
+  });
+};
+
+/**
+ * 应答收到的配对请求（接收端确认弹窗的「允许 / 拒绝」）。
+ */
+export const respondSyncPair = (deviceId: string, accept: boolean) => {
+  return call<void>(TAURI_COMMAND.RESPOND_SYNC_PAIR, "commands:labels.respondPair", {
+    accept,
+    deviceId,
+  });
+};
+
+/**
+ * 解除配对：删除已配对设备，对端后续推送将被拒绝。
+ */
+export const removeSyncDevice = (deviceId: string) => {
+  return call<void>(
+    TAURI_COMMAND.REMOVE_SYNC_DEVICE,
+    "commands:labels.removeSyncDevice",
+    { deviceId },
+  );
+};
+
+/**
+ * 修改设备备注名。
+ */
+export const renameSyncDevice = (deviceId: string, name: string) => {
+  return call<void>(
+    TAURI_COMMAND.RENAME_SYNC_DEVICE,
+    "commands:labels.renameSyncDevice",
+    { deviceId, name },
+  );
+};
+
+/**
+ * 更新设备的发送 / 接收许可；不需要改动的字段传 `null`。
+ */
+export const setSyncDevicePermissions = (
+  deviceId: string,
+  allowSend: boolean | null,
+  allowReceive: boolean | null,
+) => {
+  return call<void>(
+    TAURI_COMMAND.SET_SYNC_DEVICE_PERMISSIONS,
+    "commands:labels.setSyncDevicePermissions",
+    { allowReceive, allowSend, deviceId },
+  );
+};
+
+/**
+ * 拉黑 / 取消拉黑设备；拉黑时 Rust 侧会连带解除配对。
+ */
+export const setSyncDeviceBlocked = (deviceId: string, blocked: boolean) => {
+  return call<void>(
+    TAURI_COMMAND.SET_SYNC_DEVICE_BLOCKED,
+    "commands:labels.setSyncDeviceBlocked",
+    { blocked, deviceId },
+  );
+};
+
+/**
+ * 手动刷新附近设备列表。
+ */
+export const refreshSyncDevices = () => {
+  return call<void>(
+    TAURI_COMMAND.REFRESH_SYNC_DEVICES,
+    "commands:labels.refreshSyncDevices",
+  );
 };

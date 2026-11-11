@@ -132,6 +132,12 @@
       "source": {
         "title": "应用过滤"
       },
+      "syncDevices": {
+        "title": "设备管理"
+      },
+      "syncGeneral": {
+        "title": "常规"
+      },
       "updates": {
         "title": "更新"
       },
@@ -558,6 +564,66 @@
           "title": "忽略应用"
         }
       },
+      "sync": {
+        "deviceName": {
+          "description": "对局域网内其它设备显示的本机名称。",
+          "placeholder": "留空时使用主机名",
+          "title": "设备名称"
+        },
+        "devices": {
+          "blockedTitle": "已忽略设备",
+          "description": "管理附近设备、已配对设备与已忽略设备。",
+          "disabledHint": "开启局域网同步后，此处会显示附近设备",
+          "emptyBlocked": "暂无已忽略设备",
+          "emptyNearby": "暂无附近设备",
+          "emptyPaired": "暂无已配对设备",
+          "localDeviceName": "本机设备名：{{name}}",
+          "nearbyTitle": "附近设备",
+          "offline": "离线",
+          "online": "在线",
+          "pair": "配对",
+          "pairedTitle": "已配对设备",
+          "pairFailed": {
+            "device-offline": "设备已离线",
+            "internal-error": "内部错误",
+            "network-error": "网络错误",
+            "pair-rejected": "对方拒绝了配对请求",
+            "timeout": "配对超时"
+          },
+          "pairRequestAccept": "允许",
+          "pairRequestContent": "设备「{{name}}」（{{platform}}）请求与本机同步剪贴板",
+          "pairRequestTitle": "配对请求",
+          "pairSuccess": "配对成功",
+          "receive": "接收",
+          "refresh": "刷新附近设备",
+          "rename": "重命名",
+          "send": "发送",
+          "title": "设备管理",
+          "unblock": "取消忽略",
+          "unpair": "解除配对",
+          "unpairConfirm": "解除配对后，该设备将无法再与本机同步剪贴板。"
+        },
+        "enabled": {
+          "description": "开启后可与同一局域网内的 EcoPaste 设备配对并同步剪贴板。",
+          "title": "启用局域网同步"
+        },
+        "port": {
+          "description": "同步服务监听端口，被占用时自动尝试后续端口。",
+          "title": "同步端口"
+        },
+        "syncFiles": {
+          "description": "文件路径记录参与同步，仅同步路径引用而非文件本体。",
+          "title": "同步文件路径"
+        },
+        "syncImage": {
+          "description": "图片内容参与局域网同步。",
+          "title": "同步图片"
+        },
+        "syncText": {
+          "description": "文本内容（含链接、HTML、RTF）参与局域网同步。",
+          "title": "同步文本"
+        }
+      },
       "updates": {
         "autoCheck": {
           "description": "定期检查 EcoPaste 是否有可用的新版本。",
@@ -653,8 +719,11 @@
       "shortcuts": {
         "title": "快捷键"
       },
+      "sync": {
+        "title": "同步"
+      },
       "workflow": {
-        "title": "界面"
+        "title": "工作流"
       }
     }
   },

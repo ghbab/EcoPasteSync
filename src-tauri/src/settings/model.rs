@@ -19,6 +19,7 @@ pub struct Settings {
     pub clipboard: Clipboard,
     pub onboarding: Onboarding,
     pub update: Update,
+    pub sync: Sync,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -643,4 +644,36 @@ pub enum UpdateFrequency {
     Daily,
     Weekly,
     Monthly,
+}
+
+/// 局域网同步设置。设备信任关系与黑名单存 SQLite（`sync_devices` / `sync_blacklist`），
+/// 这里只放开关与网络参数。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default, rename_all = "camelCase")]
+pub struct Sync {
+    /// 同步总开关。关闭即停 mDNS 发现与 HTTP 服务器。
+    pub enabled: bool,
+    /// 本机对外设备名；空串回落主机名。
+    pub device_name: String,
+    /// 同步服务器首选端口；被占用时自动 +1 探测（实际端口随 mDNS 广播）。
+    pub port: u16,
+    /// 文本条目（含 HTML / RTF / URL 等子类型）是否同步。
+    pub sync_text: bool,
+    /// 图片条目是否同步。
+    pub sync_image: bool,
+    /// 文件路径记录是否同步（仅同步路径引用，不同步文件本体）。
+    pub sync_files: bool,
+}
+
+impl Default for Sync {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            device_name: String::new(),
+            port: 39782,
+            sync_text: true,
+            sync_image: true,
+            sync_files: true,
+        }
+    }
 }

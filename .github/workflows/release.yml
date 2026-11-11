@@ -271,3 +271,36 @@ jobs:
           releaseId: ${{ needs.release-metadata.outputs.release_id }}
           retryAttempts: 3
           tagName: ${{ needs.release-metadata.outputs.tag_name }}
+
+      # Windows 便携版：取 tauri build 产出的裸 exe 压缩为 zip，免安装直接运行。
+      - name: Package Windows portable zip
+        if: runner.os == 'Windows'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          tag_name="${{ needs.release-metadata.outputs.tag_name }}"
+          version="${tag_name#v}"
+
+          exe="src-tauri/target/${{ matrix.target }}/release/EcoPaste.exe"
+          if [[ ! -f "${exe}" ]]; then
+            echo "::error::Portable exe not found at ${exe}."
+            exit 1
+          fi
+
+          arch="x64"
+          if [[ "${{ matrix.target }}" == aarch64* ]]; then
+            arch="aarch64"
+          fi
+
+          dist="dist-portable"
+          mkdir -p "${dist}"
+          cp "${exe}" "${dist}/EcoPaste.exe"
+
+          zip_name="EcoPaste_${version}_${arch}_portable.zip"
+          powershell -NoProfile -Command "Compress-Archive -Path 'dist-portable/*' -DestinationPath '${zip_name}' -Force"
+
+          echo "Uploading ${zip_name} to release ${tag_name}"
+          gh release upload "${tag_name}" "${zip_name}" --clobber
