@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.2.0-preview.1](https://github.com/EcoPasteHub/EcoPaste/compare/v1.2.0...v1.2.0-preview.1) (2026-11-12)
+
+### ✨ Features
+
+* fetch large synced files on demand: files above the inline threshold stay path-only and transfer in 1 MB chunks only when pasted, with local caching and integrity verification
+
+### ⚠️ Upgrade Notice
+
+* remove the built-in auto updater and the "Check for Updates" entry; release builds no longer require updater signing keys
+
 ## [1.2.0](https://github.com/EcoPasteHub/EcoPaste/compare/v1.1.0...v1.2.0) (2026-11-11)
 
 ### ✨ Features

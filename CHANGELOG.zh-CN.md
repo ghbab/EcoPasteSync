@@ -1,5 +1,15 @@
 # 更新日志
 
+## [1.2.0-preview.1](https://github.com/EcoPasteHub/EcoPaste/compare/v1.2.0...v1.2.0-preview.1) (2026-11-12)
+
+### ✨ 新功能
+
+* 大文件按需拉取：超过阈值只同步路径，粘贴时按 1 MB 分块传输，本地缓存并校验完整性
+
+### ⚠️ 升级说明
+
+* 移除内置自动更新与「检查更新」入口，发布构建不再需要更新签名密钥
+
 ## [1.2.0](https://github.com/EcoPasteHub/EcoPaste/compare/v1.1.0...v1.2.0) (2026-11-11)
 
 ### ✨ 新功能
