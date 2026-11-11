@@ -65,8 +65,6 @@ export type WindowOpenGroupSelection = "preserve" | "all" | `group:${string}`;
 
 export type PreviewHoverDelayMs = "ms300" | "ms500" | "ms1000";
 
-export type UpdateFrequency = "daily" | "weekly" | "monthly";
-
 export type OnboardingLegacyImportType = "normal" | "favorite";
 
 export interface General {
@@ -196,15 +194,6 @@ export interface Clipboard {
   filters: Filters;
 }
 
-export interface Update {
-  autoCheck: boolean;
-  frequency: UpdateFrequency;
-  includeBeta: boolean;
-  includeNightly: boolean;
-  lastCheckedAt: string | null;
-  skippedVersion: string | null;
-}
-
 export interface Sync {
   enabled: boolean;
   deviceName: string;
@@ -224,7 +213,6 @@ export interface Settings {
   shortcuts: Shortcuts;
   clipboard: Clipboard;
   onboarding: Onboarding;
-  update: Update;
   sync: Sync;
 }
 

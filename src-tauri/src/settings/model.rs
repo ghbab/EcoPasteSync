@@ -18,7 +18,6 @@ pub struct Settings {
     pub shortcuts: Shortcuts,
     pub clipboard: Clipboard,
     pub onboarding: Onboarding,
-    pub update: Update,
     pub sync: Sync,
 }
 
@@ -624,26 +623,6 @@ pub enum WindowPosition {
 #[serde(default, rename_all = "camelCase")]
 pub struct Feedback {
     pub copy_sound: bool,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(default, rename_all = "camelCase")]
-pub struct Update {
-    pub auto_check: bool,
-    pub frequency: UpdateFrequency,
-    pub include_beta: bool,
-    pub include_nightly: bool,
-    pub last_checked_at: Option<String>,
-    pub skipped_version: Option<String>,
-}
-
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub enum UpdateFrequency {
-    #[default]
-    Daily,
-    Weekly,
-    Monthly,
 }
 
 /// 局域网同步设置。设备信任关系与黑名单存 SQLite（`sync_devices` / `sync_blacklist`），

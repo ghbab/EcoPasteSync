@@ -16,7 +16,6 @@ export const TAURI_EVENT = {
   SYNC_DEVICES_UPDATED: "sync://devices-updated",
   SYNC_PAIR_REQUEST: "sync://pair-request",
   SYNC_PAIR_RESULT: "sync://pair-result",
-  UPDATE_PROGRESS: "update://progress",
   WINDOW_BEFORE_DESTROY: "window://before-destroy",
   WINDOW_LIFECYCLE: "window://lifecycle",
   WINDOW_VISIBILITY: "window://visibility",

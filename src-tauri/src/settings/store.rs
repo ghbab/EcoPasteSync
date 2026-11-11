@@ -313,10 +313,6 @@ mod tests {
         assert!(parsed.general.tray_icon, "default kept");
         assert_eq!(parsed.shortcuts.open_clipboard, "Alt+C");
         assert_eq!(
-            parsed.update.frequency,
-            crate::settings::UpdateFrequency::Daily
-        );
-        assert_eq!(
             parsed.clipboard.content.sort,
             crate::db::models::ClipboardItemSort::UpdatedAt
         );

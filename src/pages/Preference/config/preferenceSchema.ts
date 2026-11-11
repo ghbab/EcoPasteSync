@@ -818,58 +818,6 @@ export const preferenceTabs: PreferenceTab[] = [
           },
         ],
       },
-      {
-        id: "updates",
-        settings: [
-          {
-            control: { type: "switch" },
-            id: "updates.autoCheck",
-            keywords: ["update", "version"],
-            path: ["update", "autoCheck"],
-            value: (settings) => {
-              return settings.update.autoCheck;
-            },
-          },
-          {
-            control: {
-              options: [
-                { value: "daily" },
-                { value: "weekly" },
-                { value: "monthly" },
-              ],
-              type: "segmented",
-            },
-            disabledWhen: (settings) => {
-              return !settings.update.autoCheck;
-            },
-            id: "updates.frequency",
-            keywords: ["update", "frequency", "schedule"],
-            parentId: "updates.autoCheck",
-            path: ["update", "frequency"],
-            value: (settings) => {
-              return settings.update.frequency;
-            },
-          },
-          {
-            control: { type: "switch" },
-            id: "updates.beta",
-            keywords: ["beta", "update"],
-            path: ["update", "includeBeta"],
-            value: (settings) => {
-              return settings.update.includeBeta;
-            },
-          },
-          {
-            control: { type: "switch" },
-            id: "updates.nightly",
-            keywords: ["nightly", "update"],
-            path: ["update", "includeNightly"],
-            value: (settings) => {
-              return settings.update.includeNightly;
-            },
-          },
-        ],
-      },
     ],
   },
   {
@@ -1007,11 +955,6 @@ export const preferenceTabs: PreferenceTab[] = [
       {
         id: "about",
         settings: [
-          {
-            control: { type: "action" },
-            id: "about.checkUpdates",
-            keywords: ["update", "version"],
-          },
           {
             control: { type: "action" },
             id: "about.github",

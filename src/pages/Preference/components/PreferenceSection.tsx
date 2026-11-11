@@ -242,12 +242,6 @@ function resolveSectionVisual(id: string): SectionVisual {
     };
   }
 
-  if (normalizedId.includes("updates")) {
-    return {
-      icon: "i-lucide:refresh-cw",
-    };
-  }
-
   if (normalizedId.includes("sync")) {
     return {
       icon: "i-lucide:lan",

@@ -1,6 +1,5 @@
 {
   "about": {
-    "checkUpdates": "检查更新",
     "sponsor": "赞赏支持",
     "sponsorHint": "如果 EcoPaste 帮到了你，可以给项目一点支持。",
     "sponsorQrAlt": "赞赏二维码"
@@ -138,20 +137,12 @@
       "syncGeneral": {
         "title": "常规"
       },
-      "updates": {
-        "title": "更新"
-      },
       "window": {
         "title": "剪贴板窗口"
       }
     },
     "settings": {
       "about": {
-        "checkUpdates": {
-          "controlLabel": "检查更新",
-          "description": "检查 EcoPaste 是否有可用的新版本。",
-          "title": "检查更新"
-        },
         "github": {
           "controlLabel": "打开",
           "title": "GitHub"
@@ -384,8 +375,7 @@
             "contextSubmenu": "右键子菜单窗口",
             "onboarding": "引导窗口",
             "preference": "偏好设置窗口",
-            "preview": "剪贴板预览窗口",
-            "update": "软件更新窗口"
+            "preview": "剪贴板预览窗口"
           }
         }
       },
@@ -630,29 +620,6 @@
         "syncText": {
           "description": "文本内容（含链接、HTML、RTF）参与局域网同步。",
           "title": "同步文本"
-        }
-      },
-      "updates": {
-        "autoCheck": {
-          "description": "定期检查 EcoPaste 是否有可用的新版本。",
-          "title": "自动检查更新"
-        },
-        "beta": {
-          "description": "检查更新时同时接收测试版。",
-          "title": "接收测试版更新"
-        },
-        "frequency": {
-          "description": "设置自动检查更新的时间间隔。",
-          "options": {
-            "daily": "每天",
-            "monthly": "每月",
-            "weekly": "每周"
-          },
-          "title": "自动检查频率"
-        },
-        "nightly": {
-          "description": "检查更新时同时接收每日构建版本。",
-          "title": "接收每日构建更新"
         }
       },
       "window": {
