@@ -71,6 +71,8 @@ const SETTING_ICON_MAP: Record<string, string> = {
   "sync.deviceName": "i-lucide:pen-line",
   "sync.devices": "i-lucide:monitors",
   "sync.enabled": "i-lucide:lan",
+  "sync.fileMaxSize": "i-lucide:hard-drive",
+  "sync.fileThreshold": "i-lucide:gauge",
   "sync.port": "i-lucide:network",
   "sync.syncFiles": "i-lucide:files",
   "sync.syncImage": "i-lucide:image",

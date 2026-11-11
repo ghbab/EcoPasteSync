@@ -607,6 +607,14 @@
           "description": "Pair with EcoPaste devices on the same LAN and sync the clipboard.",
           "title": "Enable LAN Sync"
         },
+        "fileMaxSize": {
+          "description": "Records whose files add up to more than this are never transferred; only their paths are synced.",
+          "title": "File Transfer Limit"
+        },
+        "fileThreshold": {
+          "description": "Records whose files add up to this size are transferred with their content. Larger ones sync the path only and are fetched when you paste.",
+          "title": "Direct Transfer Limit"
+        },
         "port": {
           "description": "Port used by the sync service; later ports are tried when occupied.",
           "title": "Sync Port"

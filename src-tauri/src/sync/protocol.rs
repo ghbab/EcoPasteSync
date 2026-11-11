@@ -76,6 +76,23 @@ pub enum PairStatusDto {
     Rejected,
 }
 
+/// 单个文件的传输指纹。
+///
+/// 目录、不可读路径以及超出采集上限的文件只带 `path`：接收端见到缺失指纹即按
+/// 「仅路径可用」处理，不会误判为可拉取。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncFileEntryDto {
+    pub path: String,
+    pub is_dir: bool,
+    /// 文件字节数；目录或不可读时为 `None`。
+    pub size: Option<i64>,
+    /// 修改时间（Unix 毫秒），拉取前用它快速判断源文件是否已变。
+    pub mtime_ms: Option<i64>,
+    /// 文件头部 64KB 的 blake3 hex，低成本校验内容未被替换。
+    pub head_hash: Option<String>,
+}
+
 /// 一条待同步的剪贴板条目（加密载荷的明文结构）。
 ///
 /// 字段语义与 [`crate::db::models::ClipboardItem`] 对齐，但只保留跨端有意义的部分：
@@ -90,6 +107,9 @@ pub struct SyncClipboardItemDto {
     pub search_text: Option<String>,
     pub summary: Option<String>,
     pub file_types: Option<String>,
+    /// files 类型条目的文件指纹；其它类型为 `None`。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub files: Option<Vec<SyncFileEntryDto>>,
     pub size: Option<i64>,
     pub width: Option<i64>,
     pub height: Option<i64>,

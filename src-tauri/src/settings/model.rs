@@ -661,8 +661,14 @@ pub struct Sync {
     pub sync_text: bool,
     /// 图片条目是否同步。
     pub sync_image: bool,
-    /// 文件路径记录是否同步（仅同步路径引用，不同步文件本体）。
+    /// 文件路径记录是否同步。
     pub sync_files: bool,
+    /// 文件本体直接传输阈值（MB，按条目内文件总大小计）。不超过该值的文件随
+    /// 元数据一并推送字节；超过则只同步路径，接收端在粘贴时按需分块拉取。
+    pub file_threshold: u64,
+    /// 文件传输上限（MB，按条目内文件总大小计）。超过该值只同步路径且不再提供
+    /// 拉取，避免把超大条目误当可传输内容。
+    pub file_max_size: u64,
 }
 
 impl Default for Sync {
@@ -674,6 +680,8 @@ impl Default for Sync {
             sync_text: true,
             sync_image: true,
             sync_files: true,
+            file_threshold: 5,
+            file_max_size: 512,
         }
     }
 }

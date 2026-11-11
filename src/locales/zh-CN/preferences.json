@@ -607,6 +607,14 @@
           "description": "开启后可与同一局域网内的 EcoPaste 设备配对并同步剪贴板。",
           "title": "启用局域网同步"
         },
+        "fileMaxSize": {
+          "description": "条目内文件总大小超过该值时不再传输，仅同步文件路径。",
+          "title": "文件传输上限"
+        },
+        "fileThreshold": {
+          "description": "条目内文件总大小不超过该值时随记录一并传输；更大的只同步路径，在粘贴时按需拉取。",
+          "title": "直接传输上限"
+        },
         "port": {
           "description": "同步服务监听端口，被占用时自动尝试后续端口。",
           "title": "同步端口"

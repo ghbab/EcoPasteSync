@@ -212,6 +212,10 @@ export interface Sync {
   syncText: boolean;
   syncImage: boolean;
   syncFiles: boolean;
+  /** 文件本体直接传输阈值（MB），超过则只同步路径、粘贴时按需拉取。 */
+  fileThreshold: number;
+  /** 单文件同步上限（MB），超过则只同步路径且不提供拉取。 */
+  fileMaxSize: number;
 }
 
 export interface Settings {

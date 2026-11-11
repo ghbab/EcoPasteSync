@@ -953,6 +953,32 @@ export const preferenceTabs: PreferenceTab[] = [
               return settings.sync.syncFiles;
             },
           },
+          {
+            control: { max: 1024, min: 1, suffixKey: "mb", type: "number" },
+            disabledWhen: (settings) => {
+              return !settings.sync.enabled || !settings.sync.syncFiles;
+            },
+            id: "sync.fileThreshold",
+            keywords: ["sync", "file", "size", "limit", "mb", "threshold"],
+            parentId: "sync.syncFiles",
+            path: ["sync", "fileThreshold"],
+            value: (settings) => {
+              return settings.sync.fileThreshold;
+            },
+          },
+          {
+            control: { max: 10240, min: 1, suffixKey: "mb", type: "number" },
+            disabledWhen: (settings) => {
+              return !settings.sync.enabled || !settings.sync.syncFiles;
+            },
+            id: "sync.fileMaxSize",
+            keywords: ["sync", "file", "size", "limit", "mb", "max"],
+            parentId: "sync.syncFiles",
+            path: ["sync", "fileMaxSize"],
+            value: (settings) => {
+              return settings.sync.fileMaxSize;
+            },
+          },
         ],
       },
       {
