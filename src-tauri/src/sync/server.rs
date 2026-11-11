@@ -21,11 +21,12 @@ use crate::core::Result;
 use crate::sync::crypto;
 use crate::sync::devices::{self, SyncDeviceRecord};
 use crate::sync::protocol::{
-    PairRequestDto, PairStatusDto, SyncClipboardItemDto, API_CLIPBOARD_PULL, API_CLIPBOARD_PUSH,
-    API_IMAGE, API_INFO, API_PAIR, API_PAIR_STATUS, HEADER_DEVICE_ID, HEADER_SIGNATURE,
-    HEADER_TIMESTAMP, PULL_PAGE_LIMIT,
+    file_chunk_signature_target, PairRequestDto, PairStatusDto, SyncClipboardItemDto,
+    API_CLIPBOARD_PULL, API_CLIPBOARD_PUSH, API_FILE_CHUNK, API_IMAGE, API_INFO, API_PAIR,
+    API_PAIR_STATUS, FILE_CHUNK_SIZE, HEADER_DEVICE_ID, HEADER_SIGNATURE, HEADER_TIMESTAMP,
+    PULL_PAGE_LIMIT,
 };
-use crate::sync::{item_to_dto, SyncManager};
+use crate::sync::{item_to_dto, split_paths, SyncManager};
 
 /// 服务器共享上下文（路由 State）。
 pub struct ServerCtx {
@@ -96,6 +97,7 @@ fn build_router(ctx: Arc<ServerCtx>) -> Router {
         .route(API_CLIPBOARD_PUSH, post(handle_push))
         .route(API_CLIPBOARD_PULL, get(handle_pull))
         .route(&format!("{API_IMAGE}/{{file}}"), get(handle_image))
+        .route(API_FILE_CHUNK, get(handle_file_chunk))
         .with_state(ctx)
 }
 
@@ -117,10 +119,13 @@ fn constant_time_eq(a: &str, b: &str) -> bool {
 }
 
 /// 认证并取回调用方设备记录与共享密钥。
+///
+/// `signature_target` 是参与签名的业务串：多数端点直接用请求路径，
+/// 文件分块端点用 [`file_chunk_signature_target`] 生成的固定格式串。
 async fn verify_auth(
     ctx: &ServerCtx,
     headers: &HeaderMap,
-    path: &str,
+    signature_target: &str,
 ) -> std::result::Result<(SyncDeviceRecord, [u8; 32]), StatusCode> {
     let device_id = headers
         .get(HEADER_DEVICE_ID)
@@ -152,7 +157,7 @@ async fn verify_auth(
         return Err(StatusCode::UNAUTHORIZED);
     }
 
-    let expected = crypto::sign_request(&key, &device_id, timestamp, path);
+    let expected = crypto::sign_request(&key, &device_id, timestamp, signature_target);
     if !constant_time_eq(&expected, &signature) {
         return Err(StatusCode::UNAUTHORIZED);
     }
@@ -175,6 +180,22 @@ fn sealed_response(key: &[u8; 32], payload: &impl serde::Serialize) -> Response 
             .into_response(),
         Err(err) => {
             log::warn!("sync server: seal response failed: {err}");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
+}
+
+/// 加密原始字节响应（文件块）。
+fn sealed_bytes_response(key: &[u8; 32], plain: &[u8]) -> Response {
+    match crypto::seal(key, plain) {
+        Ok(body) => (
+            StatusCode::OK,
+            [("content-type", "application/octet-stream")],
+            body,
+        )
+            .into_response(),
+        Err(err) => {
+            log::warn!("sync server: seal bytes failed: {err}");
             StatusCode::INTERNAL_SERVER_ERROR.into_response()
         }
     }
@@ -275,7 +296,27 @@ async fn handle_pull(
             }
         };
 
-    let dtos: Vec<SyncClipboardItemDto> = items.iter().map(item_to_dto).collect();
+    let settings = ctx.app.state::<crate::settings::SettingsStore>().snapshot();
+    let inline_threshold_bytes = settings.sync.file_threshold.saturating_mul(1024 * 1024);
+    let max_bytes = settings.sync.file_max_size.saturating_mul(1024 * 1024);
+    let dtos: Vec<SyncClipboardItemDto> = items
+        .iter()
+        .map(|item| item_to_dto(item, inline_threshold_bytes, max_bytes))
+        .collect();
+
+    // 响应 pull 也等于对外共享：登记本机产生的文件路径，允许对端随后按需拉取。
+    // 同步入库的条目带来源设备标记，不能当作本机可读路径登记，否则已配对设备
+    // 可以先推送伪造路径、再借拉取接口读取本机任意文件。
+    let mut shared_paths = Vec::new();
+    for item in &items {
+        if item.kind == crate::db::models::ClipboardKind::Files
+            && item.sync_source_device_id.is_none()
+        {
+            shared_paths.extend(split_paths(&item.content));
+        }
+    }
+    ctx.manager.remember_shared_paths(&shared_paths);
+
     let _ = device;
     sealed_response(&key, &dtos)
 }
@@ -328,6 +369,72 @@ async fn handle_image(
             StatusCode::NOT_FOUND.into_response()
         }
     }
+}
+
+/// 文件分块端点：`GET /api/file?path=..&offset=..&len=..`。
+///
+/// 只允许读取本机主动共享过的路径（见 [`SyncManager::remember_shared_paths`]），
+/// 避免已配对设备借拉取接口读取任意文件。
+async fn handle_file_chunk(
+    State(ctx): State<Arc<ServerCtx>>,
+    headers: HeaderMap,
+    Query(params): Query<std::collections::HashMap<String, String>>,
+) -> Response {
+    let Some(path) = params
+        .get("path")
+        .filter(|value| !value.is_empty())
+        .cloned()
+    else {
+        return StatusCode::BAD_REQUEST.into_response();
+    };
+    let Some(offset) = params.get("offset").and_then(|raw| raw.parse::<u64>().ok()) else {
+        return StatusCode::BAD_REQUEST.into_response();
+    };
+    let Some(len) = params.get("len").and_then(|raw| raw.parse::<u64>().ok()) else {
+        return StatusCode::BAD_REQUEST.into_response();
+    };
+    if len == 0 || len > FILE_CHUNK_SIZE as u64 {
+        return StatusCode::BAD_REQUEST.into_response();
+    }
+
+    let target = file_chunk_signature_target(&path, offset, len);
+    let (device, key) = match verify_auth(&ctx, &headers, &target).await {
+        Ok(pair) => pair,
+        Err(status) => return status.into_response(),
+    };
+    let _ = device;
+
+    // 只允许拉取本机主动共享过的路径：同步入库的远端路径不在授权表里，
+    // 已配对设备无法借这个接口读取本机任意文件。
+    if !ctx.manager.is_shared_path(&path) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+
+    // 只服务常规文件：目录、特殊设备或已删除路径一律按不存在处理。
+    match tokio::fs::metadata(&path).await {
+        Ok(meta) if meta.is_file() => {}
+        _ => return StatusCode::NOT_FOUND.into_response(),
+    }
+
+    match read_file_range(&path, offset, len).await {
+        Ok(bytes) => sealed_bytes_response(&key, &bytes),
+        Err(err) => {
+            log::warn!("sync server: read file chunk {path} at {offset} failed: {err}");
+            StatusCode::NOT_FOUND.into_response()
+        }
+    }
+}
+
+/// 读取文件指定区间；文件尾部或并发截断时返回实际读到的字节。
+async fn read_file_range(path: &str, offset: u64, len: u64) -> std::io::Result<Vec<u8>> {
+    use tokio::io::{AsyncReadExt, AsyncSeekExt};
+
+    let mut file = tokio::fs::File::open(path).await?;
+    file.seek(std::io::SeekFrom::Start(offset)).await?;
+
+    let mut buffer = Vec::with_capacity(len as usize);
+    file.take(len).read_to_end(&mut buffer).await?;
+    Ok(buffer)
 }
 
 #[cfg(test)]

@@ -1,26 +1,20 @@
 //! 同步文件条目的传输状态仓储（`sync_file_states`）。
 //!
 //! 只有「超过本体传输阈值、仅同步路径」的文件条目才会落库：接收端据此知道哪些
-//! 条目仍可按需拉取、已完成到哪一块。块级进度以位图字符串保存，重启后可续传。
+//! 条目仍可按需拉取。传输不做断点续传，任何中断都丢弃半成品、下次从头再拉。
 
 use anyhow::Context;
 use chrono::Utc;
 use sqlx::SqlitePool;
 
 use crate::core::Result;
-
-/// 分块大小（字节）。与协议层保持一致，重传粒度适中。
-pub const FILE_CHUNK_SIZE: i64 = 1024 * 1024;
+use crate::sync::protocol::FILE_CHUNK_SIZE;
 
 /// 文件条目在本机的可用状态。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SyncFileState {
-    /// 尚未开始拉取。
+    /// 尚未拉取，粘贴时可发起按需拉取。
     Pending,
-    /// 拉取中断，已完成块已落盘，可续传。
-    Partial,
-    /// 文件已在本机可用（本地已存在或拉取完成）。
-    Available,
     /// 不可拉取（超出上限、指纹缺失或源文件已变化），仅路径可用。
     Unavailable,
 }
@@ -30,19 +24,7 @@ impl SyncFileState {
     pub fn as_tag(self) -> &'static str {
         match self {
             Self::Pending => "pending",
-            Self::Partial => "partial",
-            Self::Available => "available",
             Self::Unavailable => "unavailable",
-        }
-    }
-
-    /// 反解析；未知标签按 `Unavailable` 处理（保守：不主动发起拉取）。
-    fn from_tag(tag: &str) -> Self {
-        match tag {
-            "pending" => Self::Pending,
-            "partial" => Self::Partial,
-            "available" => Self::Available,
-            _ => Self::Unavailable,
         }
     }
 }
@@ -80,16 +62,4 @@ pub async fn upsert(
     .context("failed to upsert sync file state")?;
 
     Ok(())
-}
-
-/// 查询条目的传输状态；未登记过（例如本地创建的条目）返回 `None`。
-pub async fn find_state(pool: &SqlitePool, item_id: &str) -> Result<Option<SyncFileState>> {
-    let tag: Option<String> =
-        sqlx::query_scalar("SELECT state FROM sync_file_states WHERE item_id = ?")
-            .bind(item_id)
-            .fetch_optional(pool)
-            .await
-            .context("failed to query sync file state")?;
-
-    Ok(tag.map(|tag| SyncFileState::from_tag(&tag)))
 }

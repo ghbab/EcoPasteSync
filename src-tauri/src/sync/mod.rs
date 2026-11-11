@@ -18,6 +18,7 @@ mod crypto;
 pub(crate) mod devices;
 mod discovery;
 mod file_state;
+mod file_transfer;
 mod protocol;
 mod server;
 
@@ -34,6 +35,7 @@ use crate::core::{AppError, Result};
 use crate::db::items::{self, upsert_item};
 use crate::db::models::{ClipboardItem, ClipboardKind, ClipboardSubKind, Platform};
 use crate::settings::{Settings, SettingsStore};
+use file_state::SyncFileState;
 
 pub use protocol::{
     BlockedDeviceDto, DeviceInfoDto, NearbyDeviceDto, PairStatusDto, PairedDeviceDto,
@@ -55,6 +57,10 @@ const IDENTITY_FILE: &str = "sync-identity.json";
 const FILE_HEAD_HASH_BYTES: u64 = 64 * 1024;
 /// 单条 files 条目最多采集多少个文件指纹；超出部分只带路径，避免超大目录拖慢广播。
 const FILE_FINGERPRINT_LIMIT: usize = 64;
+/// 对外共享的文件路径授权保留时长：超时后对端不能再拉取，需要重新复制一次。
+const SHARED_PATH_TTL: Duration = Duration::from_secs(24 * 60 * 60);
+/// 共享授权表的容量上限，避免长期运行无限增长。
+const SHARED_PATH_LIMIT: usize = 8192;
 
 /// 附近设备缓存条目。
 #[derive(Debug, Clone)]
@@ -103,6 +109,12 @@ pub struct SyncManager {
     pair_decisions: Mutex<HashMap<String, (PairDecision, Instant)>>,
     /// 每设备 pull 节流。
     pull_throttle: Mutex<HashMap<String, Instant>>,
+    /// 允许对端按需拉取的文件路径 → 最近一次对外共享时间。
+    ///
+    /// 只登记本机主动广播或响应 pull 的路径：同步入库的远端路径不进这里，
+    /// 避免已配对设备借拉取接口读取本机任意文件。进程重启后授权表清空，
+    /// 旧条目需要重新复制一次才能按需拉取。
+    shared_paths: Mutex<HashMap<String, Instant>>,
     /// axum 服务器关闭信号。
     shutdown_tx: Mutex<Option<watch::Sender<bool>>>,
     /// mDNS daemon 句柄（发现层注册后回填，关停时统一 shutdown）。
@@ -143,6 +155,7 @@ impl SyncManager {
             pending_pairs: Mutex::new(HashMap::new()),
             pair_decisions: Mutex::new(HashMap::new()),
             pull_throttle: Mutex::new(HashMap::new()),
+            shared_paths: Mutex::new(HashMap::new()),
             shutdown_tx: Mutex::new(None),
             daemon: Mutex::new(None),
         })
@@ -489,6 +502,40 @@ impl SyncManager {
         Ok(())
     }
 
+    // ---- 文件共享授权 ----
+
+    /// 登记本机对外共享过的文件路径（广播或响应 pull 时调用）。
+    pub fn remember_shared_paths(&self, paths: &[String]) {
+        if paths.is_empty() {
+            return;
+        }
+
+        let mut shared = self.shared_paths.lock().expect("sync poisoned");
+        let now = Instant::now();
+        shared.retain(|_, at| now.duration_since(*at) < SHARED_PATH_TTL);
+
+        for path in paths {
+            // 容量满时只更新已有条目，不再接收新路径，保证长期运行不无限增长。
+            if !shared.contains_key(path) && shared.len() >= SHARED_PATH_LIMIT {
+                continue;
+            }
+            shared.insert(path.clone(), now);
+        }
+    }
+
+    /// 路径是否仍在共享授权窗口内（对端可凭此拉取该文件）。
+    pub fn is_shared_path(&self, path: &str) -> bool {
+        let mut shared = self.shared_paths.lock().expect("sync poisoned");
+        match shared.get(path).copied() {
+            Some(at) if at.elapsed() < SHARED_PATH_TTL => true,
+            Some(_) => {
+                shared.remove(path);
+                false
+            }
+            None => false,
+        }
+    }
+
     // ---- pull 节流 ----
 
     /// 判断是否允许对设备发起 pull（节流窗口外返回 true 并占用本次窗口）。
@@ -580,7 +627,16 @@ pub async fn maybe_broadcast_item(app: &AppHandle, item: &ClipboardItem) {
         }
     };
 
-    let dto = item_to_dto(item);
+    let dto = item_to_dto(
+        item,
+        megabytes_to_bytes(settings.sync.file_threshold),
+        megabytes_to_bytes(settings.sync.file_max_size),
+    );
+    if item.kind == ClipboardKind::Files {
+        // 只登记本机真实共享出去的路径，供对端按需拉取时校验。
+        manager.remember_shared_paths(&split_paths(&item.content));
+    }
+
     for device in targets {
         if !device.allow_send {
             continue;
@@ -604,79 +660,118 @@ pub async fn maybe_broadcast_item(app: &AppHandle, item: &ClipboardItem) {
     }
 }
 
-/// 接收端为 files 条目登记传输状态。
+/// 接收端对 files 条目的落盘决策。
+enum IncomingFiles {
+    /// 不需要本地字节：对端未提供指纹，或路径本机已存在。
+    Ignore,
+    /// 已内联拉取完成，`content` 换成缓存路径。
+    Pulled(Vec<String>),
+    /// 需要登记状态表：`Pending` 等待粘贴时按需拉取，`Unavailable` 仅路径可用。
+    Deferred {
+        state: SyncFileState,
+        total_bytes: i64,
+        file_count: i64,
+    },
+}
+
+/// 决定 incoming files 条目是否需要把字节落到本机。
 ///
-/// 只有「总大小超过 `settings.sync.file_threshold`」的条目才需要按需拉取，才会入表：
-/// - 路径在本机已存在 → `Available`（同机同名路径或已落在同步目录）
-/// - 指纹缺失 / 不完整 / 超单文件上限 → `Unavailable`（仅路径可用）
-/// - 其余 → `Pending`（等粘贴时按需分块拉取）
-async fn register_incoming_file_state(
+/// 分档依据是「条目内文件总大小」：
+/// - 不超过直接传输阈值 → 立即拉取，粘贴时无需等待；
+/// - 超过阈值但不超过传输上限 → 只记 `Pending`，粘贴时再按需拉取；
+/// - 含目录、指纹不完整或超过上限 → `Unavailable`，仅保留远端路径。
+async fn resolve_incoming_files(
     app: &AppHandle,
-    item_id: &str,
     source_device_id: &str,
     dto: &SyncClipboardItemDto,
-) {
+) -> IncomingFiles {
     let files = dto.files.as_deref().unwrap_or_default();
-    let total_bytes: i64 = files.iter().filter_map(|entry| entry.size).sum();
-
-    let settings = app.state::<SettingsStore>().snapshot();
-    let threshold_bytes = i64::try_from(settings.sync.file_threshold)
-        .unwrap_or(i64::MAX)
-        .saturating_mul(1024 * 1024);
-    // 小文件随记录内联传输，不进入按需拉取状态表。
-    if total_bytes <= threshold_bytes {
-        return;
+    if files.is_empty() {
+        return IncomingFiles::Ignore;
     }
 
-    let pool = app.state::<crate::db::DatabaseState>().pool().await;
-    match file_state::find_state(&pool, item_id).await {
-        // 已拉取完成的条目不被重复入库重置。
-        Ok(Some(file_state::SyncFileState::Available)) => return,
-        Ok(_) => {}
-        Err(err) => {
-            log::warn!("sync ingest: query file state failed: {err}");
-            return;
+    let file_count = files.len() as i64;
+    let total_bytes = files
+        .iter()
+        .filter_map(|entry| entry.size)
+        .fold(0i64, i64::saturating_add);
+
+    // 路径在本机已存在且大小一致（同机复制或已拉取过）时无需任何传输。
+    // 只比存在性不够：两台机器可能有同名同路径但内容不同的文件。
+    let all_local = files.iter().all(|entry| {
+        let Ok(meta) = std::fs::metadata(&entry.path) else {
+            return false;
+        };
+        if entry.is_dir {
+            return meta.is_dir();
         }
+        match entry.size {
+            Some(size) => meta.is_file() && meta.len() as i64 == size,
+            None => meta.is_file(),
+        }
+    });
+    if all_local {
+        return IncomingFiles::Ignore;
     }
 
+    // 目录暂不做递归传输；指纹不完整（缺路径或缺大小）也无法按块拉取。
     let path_count = dto
         .content
         .split('\n')
         .filter(|path| !path.is_empty())
         .count();
-    let all_local = !files.is_empty()
-        && files
-            .iter()
-            .all(|entry| std::path::Path::new(&entry.path).exists());
-    let max_bytes = i64::try_from(settings.sync.file_max_size)
-        .unwrap_or(i64::MAX)
-        .saturating_mul(1024 * 1024);
-    // 指纹必须是完整的（每个路径一项、文件项带 size），否则无法可靠拉取。
     let fingerprints_complete = path_count == files.len()
         && files
             .iter()
             .all(|entry| entry.is_dir || entry.size.is_some());
+    let has_dir = files.iter().any(|entry| entry.is_dir);
 
-    let state = if all_local {
-        file_state::SyncFileState::Available
-    } else if !fingerprints_complete || total_bytes > max_bytes {
-        file_state::SyncFileState::Unavailable
-    } else {
-        file_state::SyncFileState::Pending
-    };
+    let settings = app.state::<SettingsStore>().snapshot();
+    let threshold_bytes = megabytes_to_bytes(settings.sync.file_threshold);
+    let max_bytes = megabytes_to_bytes(settings.sync.file_max_size);
 
-    if let Err(err) = file_state::upsert(
-        &pool,
-        item_id,
-        source_device_id,
-        state,
-        total_bytes,
-        path_count as i64,
-    )
-    .await
-    {
-        log::warn!("sync ingest: upsert file state failed: {err}");
+    if has_dir || !fingerprints_complete || total_bytes as u64 > max_bytes {
+        return IncomingFiles::Deferred {
+            state: SyncFileState::Unavailable,
+            total_bytes,
+            file_count,
+        };
     }
+
+    if total_bytes as u64 > threshold_bytes {
+        return IncomingFiles::Deferred {
+            state: SyncFileState::Pending,
+            total_bytes,
+            file_count,
+        };
+    }
+
+    // 内联拉取失败时不阻断入库：降级为按需拉取，粘贴时重试。
+    match file_transfer::pull_files(app, &dto.content, source_device_id, files).await {
+        Ok(paths) => IncomingFiles::Pulled(paths),
+        Err(err) => {
+            log::warn!("sync ingest: pull files of item from {source_device_id} failed: {err}");
+            IncomingFiles::Deferred {
+                state: SyncFileState::Pending,
+                total_bytes,
+                file_count,
+            }
+        }
+    }
+}
+
+/// MB 设置值换算为字节数（文件阈值按条目内文件总大小计）。
+fn megabytes_to_bytes(value: u64) -> u64 {
+    value.saturating_mul(1024 * 1024)
+}
+
+/// 把 files 条目的换行分隔路径串拆成列表。
+pub(crate) fn split_paths(content: &str) -> Vec<String> {
+    content
+        .split('\n')
+        .filter(|path| !path.is_empty())
+        .map(str::to_owned)
+        .collect()
 }
 
 /// 接收端入库远端条目：类型门控 + 图片回源拉取 + upsert + emit。
@@ -713,6 +808,27 @@ pub async fn ingest_remote_item(
     let mut width = dto.width;
     let mut height = dto.height;
     let mut size = dto.size;
+
+    // files：远端路径本机不可用时按阈值决定内联拉取，或登记状态留待粘贴时拉取。
+    let files_plan = if kind == ClipboardKind::Files {
+        resolve_incoming_files(app, source_device_id, dto).await
+    } else {
+        IncomingFiles::Ignore
+    };
+    let deferred_files = match files_plan {
+        IncomingFiles::Pulled(paths) => {
+            if !paths.is_empty() {
+                content = paths.join("\n");
+            }
+            None
+        }
+        IncomingFiles::Deferred {
+            state,
+            total_bytes,
+            file_count,
+        } => Some((state, total_bytes, file_count)),
+        IncomingFiles::Ignore => None,
+    };
 
     // 图片：按发送方文件名回源拉取原图字节并落盘。两端字节一致 → 文件名一致 → 天然去重。
     if kind == ClipboardKind::Image {
@@ -800,6 +916,7 @@ pub async fn ingest_remote_item(
         is_pinned: false,
         is_sensitive: dto.is_sensitive,
         platform: parse_platform_tag(&dto.platform),
+        sync_source_device_id: Some(source_device_id.to_owned()),
         note: None,
         created_at,
         updated_at: created_at,
@@ -817,8 +934,19 @@ pub async fn ingest_remote_item(
     let pool = app.state::<crate::db::DatabaseState>().pool().await;
     match upsert_item(&pool, &item).await {
         Ok(result) => {
-            if item.kind == ClipboardKind::Files {
-                register_incoming_file_state(app, &result.id, source_device_id, dto).await;
+            if let Some((state, total_bytes, file_count)) = deferred_files {
+                if let Err(err) = file_state::upsert(
+                    &pool,
+                    &result.id,
+                    source_device_id,
+                    state,
+                    total_bytes,
+                    file_count,
+                )
+                .await
+                {
+                    log::warn!("sync ingest: upsert file state failed: {err}");
+                }
             }
 
             if let Err(err) = app.emit(
@@ -980,24 +1108,44 @@ fn parse_sub_kind_tag(tag: &str) -> ClipboardSubKind {
     }
 }
 
-/// 采集 files 条目的传输指纹（大小 / 修改时间 / 头部哈希）。
+/// 采集 files 条目的传输指纹（大小 / 修改时间 / 头部哈希 / 整文件哈希）。
 ///
 /// 目录、不可读路径以及超出 [`FILE_FINGERPRINT_LIMIT`] 的文件只带 `path`；
 /// 接收端见到缺失指纹即按「仅路径可用」处理，不会误判为可拉取。
-fn collect_file_fingerprints(content: &str) -> Option<Vec<SyncFileEntryDto>> {
+///
+/// 整文件哈希只在该条目需要按需拉取（文件总大小超过 `inline_threshold_bytes`
+/// 且不超过 `max_bytes`）时计算：它要完整顺序读一遍文件，小文件内联传输不需要
+/// 这份校验，超上限的条目也不会被拉取。
+fn collect_file_fingerprints(
+    content: &str,
+    inline_threshold_bytes: u64,
+    max_bytes: u64,
+) -> Option<Vec<SyncFileEntryDto>> {
     let paths: Vec<&str> = content
         .split('\n')
         .filter(|path| !path.is_empty())
+        .take(FILE_FINGERPRINT_LIMIT)
         .collect();
     if paths.is_empty() {
         return None;
     }
 
+    let metas: Vec<Option<std::fs::Metadata>> = paths
+        .iter()
+        .map(|path| std::fs::metadata(path).ok())
+        .collect();
+    let total_bytes: u64 = metas
+        .iter()
+        .flatten()
+        .filter(|meta| meta.is_file())
+        .map(std::fs::Metadata::len)
+        .sum();
+    let need_integrity_hash = total_bytes > inline_threshold_bytes && total_bytes <= max_bytes;
+
     let entries = paths
         .into_iter()
-        .take(FILE_FINGERPRINT_LIMIT)
-        .map(|path| {
-            let meta = std::fs::metadata(path).ok();
+        .zip(metas)
+        .map(|(path, meta)| {
             let is_dir = meta.as_ref().is_some_and(std::fs::Metadata::is_dir);
 
             // 目录不参与字节传输，只带路径；文件缺失时也只剩路径。
@@ -1008,6 +1156,7 @@ fn collect_file_fingerprints(content: &str) -> Option<Vec<SyncFileEntryDto>> {
                     size: None,
                     mtime_ms: None,
                     head_hash: None,
+                    hash: None,
                 };
             }
 
@@ -1017,6 +1166,11 @@ fn collect_file_fingerprints(content: &str) -> Option<Vec<SyncFileEntryDto>> {
                 size: meta.as_ref().map(|meta| meta.len() as i64),
                 mtime_ms: meta.as_ref().and_then(file_mtime_ms),
                 head_hash: head_hash(path),
+                hash: if need_integrity_hash {
+                    file_hash(path)
+                } else {
+                    None
+                },
             }
         })
         .collect();
@@ -1044,8 +1198,25 @@ fn head_hash(path: &str) -> Option<String> {
     Some(blake3::hash(&buffer[..read]).to_hex().to_string())
 }
 
+/// 顺序读完整文件求 blake3；读失败返回 `None`（接收端退化为仅按大小校验）。
+fn file_hash(path: &str) -> Option<String> {
+    let file = std::fs::File::open(path).ok()?;
+    let mut reader = std::io::BufReader::new(file);
+    let mut hasher = blake3::Hasher::new();
+    std::io::copy(&mut reader, &mut hasher).ok()?;
+
+    Some(hasher.finalize().to_hex().to_string())
+}
+
 /// 本地条目 → 同步 DTO。
-pub(crate) fn item_to_dto(item: &ClipboardItem) -> SyncClipboardItemDto {
+///
+/// `inline_threshold_bytes` / `max_bytes` 决定 files 条目是否需要附带整文件哈希
+/// （供按需拉取校验）。
+pub(crate) fn item_to_dto(
+    item: &ClipboardItem,
+    inline_threshold_bytes: u64,
+    max_bytes: u64,
+) -> SyncClipboardItemDto {
     SyncClipboardItemDto {
         kind: kind_tag(item.kind).to_owned(),
         sub_kind: item.sub_kind.map(sub_kind_tag).map(str::to_owned),
@@ -1054,7 +1225,7 @@ pub(crate) fn item_to_dto(item: &ClipboardItem) -> SyncClipboardItemDto {
         summary: item.summary.clone(),
         file_types: item.file_types.clone(),
         files: if item.kind == ClipboardKind::Files {
-            collect_file_fingerprints(&item.content)
+            collect_file_fingerprints(&item.content, inline_threshold_bytes, max_bytes)
         } else {
             None
         },

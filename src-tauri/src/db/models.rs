@@ -62,6 +62,13 @@ pub struct ClipboardItem {
     /// 命中敏感内容规则且被收录的条目；展示是否脱敏由当前设置决定。
     pub is_sensitive: bool,
     pub platform: Platform,
+    /// 同步入库时的来源设备 id；本机复制产生的条目为 `None`。
+    ///
+    /// 仅用于文件拉取授权：只允许对端读取本机产生的 files 条目路径，避免
+    /// 已配对设备先推送伪造路径、再借拉取接口读取本机任意文件。不下发前端。
+    #[sqlx(default)]
+    #[serde(skip)]
+    pub sync_source_device_id: Option<String>,
     pub note: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,

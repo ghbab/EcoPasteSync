@@ -11,9 +11,9 @@ use crate::core::{AppError, Result};
 use crate::sync::crypto;
 use crate::sync::devices::SyncDeviceRecord;
 use crate::sync::protocol::{
-    DeviceInfoDto, PairRequestDto, PairStatusDto, SyncClipboardItemDto, API_CLIPBOARD_PULL,
-    API_CLIPBOARD_PUSH, API_IMAGE, API_PAIR, API_PAIR_STATUS, HEADER_DEVICE_ID, HEADER_SIGNATURE,
-    HEADER_TIMESTAMP,
+    file_chunk_signature_target, DeviceInfoDto, PairRequestDto, PairStatusDto,
+    SyncClipboardItemDto, API_CLIPBOARD_PULL, API_CLIPBOARD_PUSH, API_FILE_CHUNK, API_IMAGE,
+    API_PAIR, API_PAIR_STATUS, HEADER_DEVICE_ID, HEADER_SIGNATURE, HEADER_TIMESTAMP,
 };
 use crate::sync::{emit_pair_result, SyncManager};
 
@@ -210,6 +210,57 @@ pub async fn fetch_image(
     let url = format!("http://{address}{path}");
     let resp = client
         .get(&url)
+        .header(HEADER_DEVICE_ID, &self_id)
+        .header(HEADER_TIMESTAMP, timestamp.to_string())
+        .header(HEADER_SIGNATURE, &signature)
+        .send()
+        .await
+        .map_err(|err| AppError::Other(anyhow::anyhow!("get {url} failed: {err}")))?;
+
+    if !resp.status().is_success() {
+        return Err(AppError::Other(anyhow::anyhow!(
+            "get {url} returned {}",
+            resp.status()
+        )));
+    }
+
+    let sealed = resp
+        .bytes()
+        .await
+        .map_err(|err| AppError::Other(anyhow::anyhow!("read body from {url} failed: {err}")))?;
+    crypto::open(&key, &sealed)
+}
+
+/// 拉取文件块（加密 + 认证）。
+///
+/// 签名覆盖路径摘要、偏移与长度：服务端据此拒绝把同一签名挪用到其它区间，
+/// 也不需要依赖两端对 URL 百分号编码的一致实现。
+pub async fn fetch_file_chunk(
+    app: &AppHandle,
+    shared_key_hex: &str,
+    address: &str,
+    path: &str,
+    offset: u64,
+    len: u64,
+) -> Result<Vec<u8>> {
+    let key = crypto::key_from_hex(shared_key_hex)?;
+    let manager = app.state::<std::sync::Arc<SyncManager>>();
+    let self_id = manager.device_id().to_owned();
+
+    let target = file_chunk_signature_target(path, offset, len);
+    let timestamp = now_unix();
+    let signature = crypto::sign_request(&key, &self_id, timestamp, &target);
+
+    let mut url = reqwest::Url::parse(&format!("http://{address}{API_FILE_CHUNK}"))
+        .map_err(|err| AppError::Other(anyhow::anyhow!("invalid sync file url: {err}")))?;
+    url.query_pairs_mut()
+        .append_pair("path", path)
+        .append_pair("offset", &offset.to_string())
+        .append_pair("len", &len.to_string());
+
+    let client = client()?;
+    let resp = client
+        .get(url.clone())
         .header(HEADER_DEVICE_ID, &self_id)
         .header(HEADER_TIMESTAMP, timestamp.to_string())
         .header(HEADER_SIGNATURE, &signature)

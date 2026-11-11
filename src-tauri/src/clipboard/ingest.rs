@@ -319,6 +319,7 @@ pub fn build_item_with_settings(
         is_pinned: false,
         is_sensitive,
         platform: current_platform(),
+        sync_source_device_id: None,
         note: None,
         created_at: now,
         updated_at: now,

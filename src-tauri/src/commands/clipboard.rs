@@ -1568,6 +1568,7 @@ mod tests {
             is_pinned: false,
             is_sensitive,
             platform: Platform::Macos,
+            sync_source_device_id: None,
             note: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),

@@ -27,6 +27,11 @@ pub const API_CLIPBOARD_PUSH: &str = "/api/clipboard/push";
 pub const API_CLIPBOARD_PULL: &str = "/api/clipboard/pull";
 /// 加密端点：拉取图片原图字节。
 pub const API_IMAGE: &str = "/api/image";
+/// 加密端点：按块拉取文件内容（参数走 query：`path` / `offset` / `len`）。
+pub const API_FILE_CHUNK: &str = "/api/file";
+
+/// 文件分块大小（字节）：按需拉取与内联拉取共用同一粒度。
+pub const FILE_CHUNK_SIZE: i64 = 1024 * 1024;
 
 /// 认证头：调用方设备 id。
 pub const HEADER_DEVICE_ID: &str = "x-ecopaste-device";
@@ -76,6 +81,15 @@ pub enum PairStatusDto {
     Rejected,
 }
 
+/// 文件分块端点签名串。
+///
+/// 路径以 blake3 摘要参与签名：既避免分隔符歧义，也避开客户端与服务端在 URL
+/// 百分号编码上的差异。块偏移与长度一并签名，防止复用签名读取任意区间。
+pub fn file_chunk_signature_target(path: &str, offset: u64, len: u64) -> String {
+    let digest = blake3::hash(path.as_bytes()).to_hex().to_string();
+    format!("{API_FILE_CHUNK}|{digest}|{offset}|{len}")
+}
+
 /// 单个文件的传输指纹。
 ///
 /// 目录、不可读路径以及超出采集上限的文件只带 `path`：接收端见到缺失指纹即按
@@ -91,6 +105,9 @@ pub struct SyncFileEntryDto {
     pub mtime_ms: Option<i64>,
     /// 文件头部 64KB 的 blake3 hex，低成本校验内容未被替换。
     pub head_hash: Option<String>,
+    /// 整文件 blake3 hex；只对需要按需拉取的条目采集，拉取完成后用它校验完整性。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hash: Option<String>,
 }
 
 /// 一条待同步的剪贴板条目（加密载荷的明文结构）。

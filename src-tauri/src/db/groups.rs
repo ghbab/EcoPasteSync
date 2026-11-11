@@ -215,6 +215,7 @@ mod tests {
             is_pinned: false,
             is_sensitive: false,
             platform: Platform::Macos,
+            sync_source_device_id: None,
             note: None,
             created_at: ts,
             updated_at: ts,
