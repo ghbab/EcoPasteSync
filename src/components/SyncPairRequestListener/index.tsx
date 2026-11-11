@@ -1,9 +1,6 @@
 import type { FC } from "react";
 import { useTranslation } from "react-i18next";
-import {
-  respondSyncPair,
-  type SyncPairRequestPayload,
-} from "@/commands";
+import { respondSyncPair, type SyncPairRequestPayload } from "@/commands";
 import { TAURI_EVENT } from "@/constants/events";
 import { useTauriListen } from "@/hooks/useTauriListen";
 import { getModalApi } from "@/utils/feedback";

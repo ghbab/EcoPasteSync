@@ -12,6 +12,9 @@ dist
 dist-ssr
 *.local
 
+# pnpm 本地包存储（避免被 lint 扫描或误提交）
+.pnpm-store/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

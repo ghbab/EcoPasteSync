@@ -1539,19 +1539,27 @@ export const getSyncState = () => {
  * 向附近设备发起配对；结果经 `sync://pair-result` 事件异步返回。
  */
 export const requestSyncPair = (deviceId: string) => {
-  return call<void>(TAURI_COMMAND.REQUEST_SYNC_PAIR, "commands:labels.requestPair", {
-    deviceId,
-  });
+  return call<void>(
+    TAURI_COMMAND.REQUEST_SYNC_PAIR,
+    "commands:labels.requestPair",
+    {
+      deviceId,
+    },
+  );
 };
 
 /**
  * 应答收到的配对请求（接收端确认弹窗的「允许 / 拒绝」）。
  */
 export const respondSyncPair = (deviceId: string, accept: boolean) => {
-  return call<void>(TAURI_COMMAND.RESPOND_SYNC_PAIR, "commands:labels.respondPair", {
-    accept,
-    deviceId,
-  });
+  return call<void>(
+    TAURI_COMMAND.RESPOND_SYNC_PAIR,
+    "commands:labels.respondPair",
+    {
+      accept,
+      deviceId,
+    },
+  );
 };
 
 /**

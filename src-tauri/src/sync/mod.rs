@@ -13,9 +13,9 @@
 //! 事件契约（前端 `src/constants/events.ts`）：
 //! `sync://devices-updated` / `sync://pair-request` / `sync://pair-result`。
 
-mod client;
+pub(crate) mod client;
 mod crypto;
-mod devices;
+pub(crate) mod devices;
 mod discovery;
 mod protocol;
 mod server;
@@ -38,8 +38,8 @@ pub use protocol::{
     BlockedDeviceDto, DeviceInfoDto, NearbyDeviceDto, PairStatusDto, PairedDeviceDto,
 };
 use protocol::{
-    EVENT_DEVICES_UPDATED, EVENT_PAIR_REQUEST, EVENT_PAIR_RESULT, PairRequestDto,
-    SyncClipboardItemDto,
+    PairRequestDto, SyncClipboardItemDto, EVENT_DEVICES_UPDATED, EVENT_PAIR_REQUEST,
+    EVENT_PAIR_RESULT,
 };
 
 /// 配对请求的受理有效期（秒）：超时后 B 端不再接受确认。
@@ -161,7 +161,12 @@ impl SyncManager {
             return configured.to_owned();
         }
 
-        tauri_plugin_os::hostname().unwrap_or_else(|| "EcoPaste".to_owned())
+        let hostname = tauri_plugin_os::hostname();
+        if hostname.trim().is_empty() {
+            return "EcoPaste".to_owned();
+        }
+
+        hostname
     }
 
     /// 当前对外可见的设备信息（`/api/info` 响应）。
@@ -220,7 +225,7 @@ impl SyncManager {
         *self.shutdown_tx.lock().expect("sync poisoned") = Some(shutdown);
 
         let manager = app.state::<Arc<SyncManager>>().inner().clone();
-        discovery::spawn_discovery(app.clone(), manager, desired.name.clone(), port)?;
+        discovery::spawn_discovery(app.clone(), manager, desired.device_name.clone(), port)?;
 
         *self.fingerprint.write().expect("sync poisoned") = Some(desired.clone());
         log::info!("sync started on port {port} as {}", self.device_id);
@@ -328,6 +333,11 @@ impl SyncManager {
             return false;
         }
 
+        // 先取出事件所需字段，避免 `request` move 进 HashMap 后再借用。
+        let device_id = request.device_id.clone();
+        let name = request.name.clone();
+        let platform = request.platform.clone();
+
         {
             let mut pending = self.pending_pairs.lock().expect("sync poisoned");
             let now = Instant::now();
@@ -336,26 +346,13 @@ impl SyncManager {
                 now.duration_since(pair.received_at).as_secs() < PAIR_PENDING_TTL_SECS
             });
             pending.insert(
-                request.device_id.clone(),
+                device_id.clone(),
                 PendingPair {
                     request,
                     received_at: now,
                 },
             );
         }
-
-        // 锁外取一份构造事件，避免借用冲突。
-        let (device_id, name, platform) = {
-            let pending = self.pending_pairs.lock().expect("sync poisoned");
-            match pending.get(&request.device_id) {
-                Some(pair) => (
-                    pair.request.device_id.clone(),
-                    pair.request.name.clone(),
-                    pair.request.platform.clone(),
-                ),
-                None => return false,
-            }
-        };
 
         let event = json!({
             "deviceId": device_id,
@@ -410,7 +407,8 @@ impl SyncManager {
         {
             let mut decisions = self.pair_decisions.lock().expect("sync poisoned");
             let now = Instant::now();
-            decisions.retain(|_, (_, at)| now.duration_since(*at).as_secs() < PAIR_POLL_TIMEOUT_SECS);
+            decisions
+                .retain(|_, (_, at)| now.duration_since(*at).as_secs() < PAIR_POLL_TIMEOUT_SECS);
             let decision = if accept {
                 PairDecision::Accepted
             } else {
@@ -595,23 +593,22 @@ pub async fn maybe_broadcast_item(app: &AppHandle, item: &ClipboardItem) {
         let app = app.clone();
         let dto = dto.clone();
         tauri::async_runtime::spawn(async move {
-            if let Err(err) = client::push_item(
-                &app,
-                &device.device_id,
-                &device.shared_key,
-                &address,
-                &dto,
-            )
-            .await
-            {
-                log::warn!("sync push to {} ({address}) failed: {err}", device.device_id);
+            if let Err(err) = client::push_item(&app, &device.shared_key, &address, &dto).await {
+                log::warn!(
+                    "sync push to {} ({address}) failed: {err}",
+                    device.device_id
+                );
             }
         });
     }
 }
 
 /// 接收端入库远端条目：类型门控 + 图片回源拉取 + upsert + emit。
-pub async fn ingest_remote_item(app: &AppHandle, source_device_id: &str, dto: &SyncClipboardItemDto) {
+pub async fn ingest_remote_item(
+    app: &AppHandle,
+    source_device_id: &str,
+    dto: &SyncClipboardItemDto,
+) {
     let settings = app.state::<SettingsStore>().snapshot();
     if !settings.sync.enabled {
         return;
@@ -654,20 +651,14 @@ pub async fn ingest_remote_item(app: &AppHandle, source_device_id: &str, dto: &S
         }
 
         let manager = app.state::<Arc<SyncManager>>();
-        let Some(address) = manager.device_address(source_device_id, device.last_address.as_deref())
+        let Some(address) =
+            manager.device_address(source_device_id, device.last_address.as_deref())
         else {
             log::warn!("sync ingest: source device {source_device_id} address unknown");
             return;
         };
 
-        let bytes = match client::fetch_image(
-            app,
-            source_device_id,
-            &device.shared_key,
-            &address,
-            &dto.content,
-        )
-        .await
+        let bytes = match client::fetch_image(app, &device.shared_key, &address, &dto.content).await
         {
             Ok(bytes) => bytes,
             Err(err) => {
@@ -682,7 +673,7 @@ pub async fn ingest_remote_item(app: &AppHandle, source_device_id: &str, dto: &S
         // 宽高缺失时本地解码补齐（store 不解码图片）。
         let (w, h) = match (dto.width, dto.height) {
             (Some(w), Some(h)) if w > 0 && h > 0 => (w, h),
-            _ => match image::load_from_mem(&bytes) {
+            _ => match image::load_from_memory(&bytes) {
                 Ok(decoded) => (i64::from(decoded.width()), i64::from(decoded.height())),
                 Err(_) => (0, 0),
             },
@@ -709,7 +700,7 @@ pub async fn ingest_remote_item(app: &AppHandle, source_device_id: &str, dto: &S
 
     let created_at = chrono::DateTime::parse_from_rfc3339(&dto.created_at)
         .map(|ts| ts.with_timezone(&chrono::Utc))
-        .unwrap_or_else(chrono::Utc::now);
+        .unwrap_or_else(|_| chrono::Utc::now());
     // 防御：远端时钟超前时夹回当前时间，避免历史列表排序错乱。
     let now = chrono::Utc::now();
     let created_at = created_at.min(now);
@@ -777,12 +768,14 @@ pub async fn pull_from_device(app: &AppHandle, device_id: &str) {
     }
 
     let pool = app.state::<crate::db::DatabaseState>().pool().await;
-    let Some(device) = match devices::find_device(&pool, device_id).await {
+    let Some(device) = (match devices::find_device(&pool, device_id).await {
         Ok(device) => device,
         Err(err) => {
             log::warn!("sync pull: find device {device_id} failed: {err}");
             return;
         }
+    }) else {
+        return;
     };
     let Some(address) = manager.device_address(device_id, device.last_address.as_deref()) else {
         return;
@@ -829,7 +822,9 @@ pub async fn sync_state_payload(app: &AppHandle) -> SyncStateDto {
 
     let pool = app.state::<crate::db::DatabaseState>().pool().await;
     let paired = devices::list_devices(&pool).await.unwrap_or_default();
-    let blocked_ids = devices::list_blacklisted_ids(&pool).await.unwrap_or_default();
+    let blocked_ids = devices::list_blacklisted_ids(&pool)
+        .await
+        .unwrap_or_default();
 
     let paired = paired
         .into_iter()

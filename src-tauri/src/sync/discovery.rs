@@ -42,17 +42,20 @@ pub fn spawn_discovery(
     ]);
 
     let ip = local_lan_ip().to_string();
+    // mdns-sd 0.13 的构造函数签名：(服务类型, 实例名, 主机名, IP, 端口, TXT 属性)，返回 Result。
     let service = mdns_sd::ServiceInfo::new(
         protocol::SERVICE_TYPE,
         &instance,
         &host_name,
         ip.as_str(),
+        port,
         properties,
     )
+    .map_err(|err| AppError::Other(anyhow::anyhow!("build mDNS service info failed: {err}")))?
     .enable_addr_auto();
 
     daemon
-        .register_service(service)
+        .register(service)
         .map_err(|err| AppError::Other(anyhow::anyhow!("register mDNS service failed: {err}")))?;
 
     let receiver = daemon
@@ -130,7 +133,6 @@ pub fn spawn_discovery(
         });
     }
 
-    let _ = port; // 端口已随 ServiceInfo 广播，此处无需再用。
     Ok(())
 }
 
@@ -169,11 +171,7 @@ fn resolve_nearby_entry(info: &mdns_sd::ServiceInfo) -> Option<NearbyEntry> {
 /// 探测本机局域网 IP：UDP connect 仅让内核选默认路由，不实际发包。
 /// 依次尝试国内 / 国际公共 DNS 与常见网关，全部失败则回落回环地址。
 fn local_lan_ip() -> IpAddr {
-    let probes: [(&str, u16); 3] = [
-        ("223.5.5.5", 80),
-        ("8.8.8.8", 80),
-        ("192.168.1.1", 80),
-    ];
+    let probes: [(&str, u16); 3] = [("223.5.5.5", 80), ("8.8.8.8", 80), ("192.168.1.1", 80)];
 
     for (host, port) in probes {
         let Ok(socket) = UdpSocket::bind("0.0.0.0:0") else {

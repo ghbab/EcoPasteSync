@@ -50,9 +50,7 @@ pub async fn update_settings(app: AppHandle, patch: serde_json::Value) -> Result
                 .is_some_and(|g| g.contains_key("runAsAdmin"))
         })
         .unwrap_or(false);
-    let touches_sync = patch_obj
-        .map(|m| m.contains_key("sync"))
-        .unwrap_or(false);
+    let touches_sync = patch_obj.map(|m| m.contains_key("sync")).unwrap_or(false);
 
     let next = app.state::<SettingsStore>().update(patch)?;
 

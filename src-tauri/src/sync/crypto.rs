@@ -178,7 +178,13 @@ mod tests {
 
     #[test]
     fn tolerance_window() {
-        assert!(timestamp_within_tolerance(1000, 1000 + AUTH_TIMESTAMP_TOLERANCE_SECS));
-        assert!(!timestamp_within_tolerance(1000, 1000 + AUTH_TIMESTAMP_TOLERANCE_SECS + 1));
+        assert!(timestamp_within_tolerance(
+            1000,
+            1000 + AUTH_TIMESTAMP_TOLERANCE_SECS
+        ));
+        assert!(!timestamp_within_tolerance(
+            1000,
+            1000 + AUTH_TIMESTAMP_TOLERANCE_SECS + 1
+        ));
     }
 }

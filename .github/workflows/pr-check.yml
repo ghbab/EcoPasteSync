@@ -4,6 +4,11 @@ name: PR Check
   pull_request:
     branches:
       - master
+  # 允许直接推送工作分支时触发检查，便于在无本地构建环境时验证改动。
+  push:
+    branches:
+      - master
+      - "trae/**"
 
 jobs:
   changes:
@@ -25,6 +30,15 @@ jobs:
           frontend=false
           backend=false
           base_sha="${{ github.event.pull_request.base.sha }}"
+
+          # push 事件没有 pull_request 上下文，回退到本次推送前的提交；
+          # 分支首次推送时 before 为全零，再用首个提交做基线。
+          if [[ -z "${base_sha}" ]]; then
+            base_sha="${{ github.event.before }}"
+          fi
+          if [[ -z "${base_sha}" || "${base_sha}" == "0000000000000000000000000000000000000000" ]]; then
+            base_sha="$(git rev-list --max-parents=0 HEAD)"
+          fi
 
           while IFS= read -r file; do
             case "$file" in

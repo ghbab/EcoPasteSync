@@ -5,7 +5,6 @@
 //! 请求 / 响应体均为 `nonce(12) || ChaCha20-Poly1305 密文`，
 //! 并带 `X-Device-Id` / `X-Timestamp` / `X-Signature` 认证头。
 
-use std::net::SocketAddr;
 use std::sync::Arc;
 
 use axum::body::Bytes;
@@ -37,7 +36,10 @@ pub struct ServerCtx {
 /// 启动服务器：从首选端口开始探测绑定（被占用则 +1，最多 16 次）。
 /// 端口探测用 std 同步 bind（`apply` 可能来自异步命令上下文，避免嵌套 block_on），
 /// 随后转为 tokio listener 并 spawn 服务任务。返回实际监听端口与关闭信号。
-pub fn spawn_server(ctx: Arc<ServerCtx>, preferred_port: u16) -> Result<(u16, watch::Sender<bool>)> {
+pub fn spawn_server(
+    ctx: Arc<ServerCtx>,
+    preferred_port: u16,
+) -> Result<(u16, watch::Sender<bool>)> {
     let mut port = preferred_port;
     let listener = loop {
         match std::net::TcpListener::bind(("0.0.0.0", port)) {
@@ -56,13 +58,14 @@ pub fn spawn_server(ctx: Arc<ServerCtx>, preferred_port: u16) -> Result<(u16, wa
 
     let actual_port = listener
         .local_addr()
-        .map(SocketAddr::port)
+        .map(|addr| addr.port())
         .unwrap_or(port);
-    listener
-        .set_nonblocking(true)
-        .map_err(|err| crate::core::AppError::Other(anyhow::anyhow!("set nonblocking failed: {err}")))?;
-    let listener = tokio::net::TcpListener::from_std(listener)
-        .map_err(|err| crate::core::AppError::Other(anyhow::anyhow!("convert listener failed: {err}")))?;
+    listener.set_nonblocking(true).map_err(|err| {
+        crate::core::AppError::Other(anyhow::anyhow!("set nonblocking failed: {err}"))
+    })?;
+    let listener = tokio::net::TcpListener::from_std(listener).map_err(|err| {
+        crate::core::AppError::Other(anyhow::anyhow!("convert listener failed: {err}"))
+    })?;
 
     let router = build_router(ctx);
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
@@ -92,10 +95,7 @@ fn build_router(ctx: Arc<ServerCtx>) -> Router {
         .route(API_PAIR_STATUS, get(handle_pair_status))
         .route(API_CLIPBOARD_PUSH, post(handle_push))
         .route(API_CLIPBOARD_PULL, get(handle_pull))
-        .route(
-            &format!("{API_IMAGE}/{{file}}"),
-            get(handle_image),
-        )
+        .route(&format!("{API_IMAGE}/{{file}}"), get(handle_image))
         .with_state(ctx)
 }
 
@@ -203,11 +203,7 @@ async fn handle_pair(
     }
 
     if ctx.manager.handle_pair_request(&ctx.app, request) {
-        (
-            StatusCode::ACCEPTED,
-            Json(PairStatusDto::Pending),
-        )
-            .into_response()
+        (StatusCode::ACCEPTED, Json(PairStatusDto::Pending)).into_response()
     } else {
         StatusCode::CONFLICT.into_response()
     }
@@ -270,19 +266,14 @@ async fn handle_pull(
     });
 
     let pool = ctx.app.state::<crate::db::DatabaseState>().pool().await;
-    let items = match crate::db::items::list_recent_items_for_sync(
-        &pool,
-        since,
-        PULL_PAGE_LIMIT,
-    )
-    .await
-    {
-        Ok(items) => items,
-        Err(err) => {
-            log::warn!("sync server: list items for pull failed: {err}");
-            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-        }
-    };
+    let items =
+        match crate::db::items::list_recent_items_for_sync(&pool, since, PULL_PAGE_LIMIT).await {
+            Ok(items) => items,
+            Err(err) => {
+                log::warn!("sync server: list items for pull failed: {err}");
+                return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+            }
+        };
 
     let dtos: Vec<SyncClipboardItemDto> = items.iter().map(item_to_dto).collect();
     let _ = device;
@@ -297,9 +288,7 @@ async fn handle_image(
     // 严格校验文件名格式（blake3 hex + .png），防路径穿越。
     let valid = file.len() == 68
         && file.ends_with(".png")
-        && file[..64]
-            .chars()
-            .all(|c| c.is_ascii_hexdigit());
+        && file[..64].chars().all(|c| c.is_ascii_hexdigit());
     if !valid {
         return StatusCode::BAD_REQUEST.into_response();
     }
@@ -311,7 +300,11 @@ async fn handle_image(
     };
     let _ = device;
 
-    let store = ctx.app.state::<crate::clipboard::ImageStore>().inner().clone();
+    let store = ctx
+        .app
+        .state::<crate::clipboard::ImageStore>()
+        .inner()
+        .clone();
     // 文件名已通过格式校验（64 位 hex + .png），origin_path 直接拼接分片目录。
     let origin = store.origin_path(&file);
     match tokio::fs::read(origin).await {

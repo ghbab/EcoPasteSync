@@ -5,7 +5,7 @@
 use std::time::Duration;
 
 use reqwest::Client;
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager};
 
 use crate::core::{AppError, Result};
 use crate::sync::crypto;
@@ -97,7 +97,10 @@ async fn poll_pair_result(
     device_id: &str,
     seed: &str,
 ) {
-    let url = format!("http://{address}{API_PAIR_STATUS}?deviceId={}", manager.device_id());
+    let url = format!(
+        "http://{address}{API_PAIR_STATUS}?deviceId={}",
+        manager.device_id()
+    );
     let started = std::time::Instant::now();
 
     loop {
@@ -152,7 +155,6 @@ async fn poll_pair_result(
 /// 推送单条剪贴板条目到对端（加密 + 认证）。
 pub async fn push_item(
     app: &AppHandle,
-    device_id: &str,
     shared_key_hex: &str,
     address: &str,
     dto: &SyncClipboardItemDto,
@@ -161,8 +163,7 @@ pub async fn push_item(
     let manager = app.state::<std::sync::Arc<SyncManager>>();
     let self_id = manager.device_id().to_owned();
 
-    let plain = serde_json::to_vec(dto)
-        .map_err(|err| AppError::Other(err.into()))?;
+    let plain = serde_json::to_vec(dto).map_err(|err| AppError::Other(err.into()))?;
     let body = crypto::seal(&key, &plain)?;
 
     let timestamp = now_unix();
@@ -192,7 +193,6 @@ pub async fn push_item(
 /// 拉取远端图片原图字节（加密 + 认证）。
 pub async fn fetch_image(
     app: &AppHandle,
-    device_id: &str,
     shared_key_hex: &str,
     address: &str,
     file_name: &str,
@@ -232,11 +232,7 @@ pub async fn fetch_image(
 }
 
 /// 增量拉取：按设备 `last_pull_at` 游标拉近段条目并逐条入库，随后推进游标。
-pub async fn pull_items(
-    app: &AppHandle,
-    device: &SyncDeviceRecord,
-    address: &str,
-) -> Result<()> {
+pub async fn pull_items(app: &AppHandle, device: &SyncDeviceRecord, address: &str) -> Result<()> {
     let key = crypto::key_from_hex(&device.shared_key)?;
     let manager = app.state::<std::sync::Arc<SyncManager>>();
     let self_id = manager.device_id().to_owned();
@@ -271,8 +267,8 @@ pub async fn pull_items(
         .await
         .map_err(|err| AppError::Other(anyhow::anyhow!("read body from {url} failed: {err}")))?;
     let plain = crypto::open(&key, &sealed)?;
-    let items: Vec<SyncClipboardItemDto> = serde_json::from_slice(&plain)
-        .map_err(|err| AppError::Other(err.into()))?;
+    let items: Vec<SyncClipboardItemDto> =
+        serde_json::from_slice(&plain).map_err(|err| AppError::Other(err.into()))?;
 
     let mut max_created: Option<chrono::DateTime<chrono::Utc>> = None;
     for dto in items {

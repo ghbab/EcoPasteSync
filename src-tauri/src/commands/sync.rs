@@ -131,7 +131,10 @@ pub async fn refresh_sync_devices(app: AppHandle) -> Result<()> {
     // 对已配对且最近有地址的设备立即补拉（绕过节流的一次性操作）。
     let pool = app.state::<crate::db::DatabaseState>().pool().await;
     for device in devices::list_devices(&pool).await? {
-        if manager.device_address(&device.device_id, device.last_address.as_deref()).is_some() {
+        if manager
+            .device_address(&device.device_id, device.last_address.as_deref())
+            .is_some()
+        {
             let app = app.clone();
             let device_id = device.device_id.clone();
             tauri::async_runtime::spawn(async move {

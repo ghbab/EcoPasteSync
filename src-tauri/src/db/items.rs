@@ -1,6 +1,6 @@
 use anyhow::Context;
 use blake3::Hasher;
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use sqlx::{QueryBuilder, Sqlite, SqlitePool};
 
 use crate::core::Result;

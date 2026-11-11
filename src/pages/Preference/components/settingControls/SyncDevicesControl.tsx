@@ -4,18 +4,18 @@ import type { FC, ReactNode } from "react";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
-  getSyncState,
   type BlockedDevice,
+  getSyncState,
   type NearbyDevice,
   type PairedDevice,
   refreshSyncDevices,
   removeSyncDevice,
   renameSyncDevice,
   requestSyncPair,
-  setSyncDeviceBlocked,
-  setSyncDevicePermissions,
   type SyncPairResultPayload,
   type SyncState,
+  setSyncDeviceBlocked,
+  setSyncDevicePermissions,
 } from "@/commands";
 import CustomIconButton from "@/components/CustomIconButton";
 import Tooltip from "@/components/Tooltip";
@@ -49,25 +49,28 @@ const SyncDevicesControl: FC = () => {
   });
 
   // 发起端在收到配对结果后结束按钮 loading 并提示成功 / 失败原因。
-  useTauriListen<SyncPairResultPayload>(TAURI_EVENT.SYNC_PAIR_RESULT, (event) => {
-    const { accepted, deviceId, reason } = event.payload;
+  useTauriListen<SyncPairResultPayload>(
+    TAURI_EVENT.SYNC_PAIR_RESULT,
+    (event) => {
+      const { accepted, deviceId, reason } = event.payload;
 
-    if (deviceId !== pairingDeviceId) return;
+      if (deviceId !== pairingDeviceId) return;
 
-    setPairingDeviceId(null);
+      setPairingDeviceId(null);
 
-    if (accepted) {
-      getMessageApi().success(
-        t("schema.settings.sync.devices.pairSuccess"),
+      if (accepted) {
+        getMessageApi().success(t("schema.settings.sync.devices.pairSuccess"));
+
+        return;
+      }
+
+      getMessageApi().error(
+        t(
+          `schema.settings.sync.devices.pairFailed.${resolvePairFailureKey(reason)}`,
+        ),
       );
-
-      return;
-    }
-
-    getMessageApi().error(
-      t(`schema.settings.sync.devices.pairFailed.${resolvePairFailureKey(reason)}`),
-    );
-  });
+    },
+  );
 
   const handleRefresh = async () => {
     setRefreshing(true);
@@ -199,10 +202,10 @@ const SyncDevicesControl: FC = () => {
           nearbyDevices.map((device) => {
             return (
               <NearbyDeviceRow
+                device={device}
                 disabled={pairingDeviceId !== null}
                 key={device.deviceId}
                 loading={pairingDeviceId === device.deviceId}
-                device={device}
                 onPair={handlePair}
               />
             );
@@ -219,9 +222,9 @@ const SyncDevicesControl: FC = () => {
               <PairedDeviceRow
                 device={device}
                 key={device.deviceId}
+                onReceiveChange={handleReceiveChange}
                 onRename={handleRename}
                 onSendChange={handleSendChange}
-                onReceiveChange={handleReceiveChange}
                 onUnpair={handleUnpair}
               />
             );
@@ -261,7 +264,7 @@ const DeviceGroup: FC<DeviceGroupProps> = (props) => {
 
   return (
     <section className="flex flex-col">
-      <h3 className="m-0 px-4 pb-1 pt-2 font-medium text-ant-secondary text-xs">
+      <h3 className="m-0 px-4 pt-2 pb-1 font-medium text-ant-secondary text-xs">
         {title}
       </h3>
 
@@ -404,8 +407,8 @@ const PairedDeviceRow: FC<PairedDeviceRowProps> = (props) => {
       <span className="flex shrink-0 items-center gap-1">
         <span
           className={cn("size-1.5 rounded-full", {
-            "bg-ant-success": device.online,
             "bg-ant-disabled": !device.online,
+            "bg-ant-success": device.online,
           })}
         />
         <span className="text-ant-secondary text-xs">
@@ -474,7 +477,9 @@ const BlockedDeviceRow: FC<BlockedDeviceRowProps> = (props) => {
         {device.name ?? device.deviceId.slice(0, 8)}
       </span>
 
-      {device.platform !== null ? <PlatformTag platform={device.platform} /> : null}
+      {device.platform !== null ? (
+        <PlatformTag platform={device.platform} />
+      ) : null}
 
       <Button onClick={handleUnblock} size="small">
         {t("schema.settings.sync.devices.unblock")}

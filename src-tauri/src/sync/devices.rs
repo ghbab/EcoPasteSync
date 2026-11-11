@@ -97,12 +97,10 @@ pub async fn list_devices(pool: &SqlitePool) -> Result<Vec<SyncDeviceRecord>> {
 }
 
 /// 按 device_id 查找已配对设备（服务端鉴权热路径）。
-pub async fn find_device(
-    pool: &SqlitePool,
-    device_id: &str,
-) -> Result<Option<SyncDeviceRecord>> {
+pub async fn find_device(pool: &SqlitePool, device_id: &str) -> Result<Option<SyncDeviceRecord>> {
     let mut qb: QueryBuilder<Sqlite> = QueryBuilder::new(SELECT_DEVICE);
-    qb.push(" WHERE device_id = ").push_bind(device_id.to_owned());
+    qb.push(" WHERE device_id = ")
+        .push_bind(device_id.to_owned());
 
     let row = qb
         .build_query_as::<RawDeviceRow>()
@@ -154,7 +152,8 @@ pub async fn set_device_permissions(
     if let Some(allow_receive) = allow_receive {
         qb.push(", allow_receive = ").push_bind(allow_receive);
     }
-    qb.push(" WHERE device_id = ").push_bind(device_id.to_owned());
+    qb.push(" WHERE device_id = ")
+        .push_bind(device_id.to_owned());
 
     qb.build()
         .execute(pool)
@@ -164,11 +163,7 @@ pub async fn set_device_permissions(
 }
 
 /// 更新设备在线信息（发现层每次 Resolved 调用）。
-pub async fn touch_device(
-    pool: &SqlitePool,
-    device_id: &str,
-    address: &str,
-) -> Result<()> {
+pub async fn touch_device(pool: &SqlitePool, device_id: &str, address: &str) -> Result<()> {
     sqlx::query(
         "UPDATE sync_devices \
          SET last_seen_at = ?, last_address = ?, updated_at = ? \
@@ -190,15 +185,13 @@ pub async fn set_last_pull_at(
     device_id: &str,
     pulled_until: DateTime<Utc>,
 ) -> Result<()> {
-    sqlx::query(
-        "UPDATE sync_devices SET last_pull_at = ?, updated_at = ? WHERE device_id = ?",
-    )
-    .bind(pulled_until)
-    .bind(Utc::now())
-    .bind(device_id)
-    .execute(pool)
-    .await
-    .map_err(|err| AppError::Other(err.into()))?;
+    sqlx::query("UPDATE sync_devices SET last_pull_at = ?, updated_at = ? WHERE device_id = ?")
+        .bind(pulled_until)
+        .bind(Utc::now())
+        .bind(device_id)
+        .execute(pool)
+        .await
+        .map_err(|err| AppError::Other(err.into()))?;
     Ok(())
 }
 
@@ -321,7 +314,9 @@ mod tests {
         assert_eq!(found.platform, Platform::Windows);
         assert_eq!(found.shared_key, "ab".repeat(32));
 
-        rename_device(&pool, "dev-1", "  我的笔记本  ").await.unwrap();
+        rename_device(&pool, "dev-1", "  我的笔记本  ")
+            .await
+            .unwrap();
         let found = find_device(&pool, "dev-1").await.unwrap().unwrap();
         assert_eq!(found.name, "我的笔记本");
 
@@ -378,7 +373,9 @@ mod tests {
         let pool = memory_pool().await;
         upsert_device(&pool, &sample_record("dev-1")).await.unwrap();
 
-        touch_device(&pool, "dev-1", "10.0.0.5:40000").await.unwrap();
+        touch_device(&pool, "dev-1", "10.0.0.5:40000")
+            .await
+            .unwrap();
         let found = find_device(&pool, "dev-1").await.unwrap().unwrap();
         assert_eq!(found.last_address.as_deref(), Some("10.0.0.5:40000"));
         assert!(found.last_seen_at.is_some());
