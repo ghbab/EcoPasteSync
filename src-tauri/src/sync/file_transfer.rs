@@ -140,6 +140,8 @@ pub async fn pull_files(
     for (index, source) in top_paths.iter().enumerate() {
         let name = unique_file_name(source, index, &mut names);
         let local_root = root.join(&name);
+        // 先取顶层本地路径文本：分支里 `local_root` 会被移进落盘计划。
+        let local_root_text = local_root.to_string_lossy().into_owned();
         let group = &groups[index];
         let is_dir = group
             .iter()
@@ -234,7 +236,7 @@ pub async fn pull_files(
             });
         }
 
-        local_paths.push(local_root.to_string_lossy().into_owned());
+        local_paths.push(local_root_text);
     }
 
     let total_bytes: u64 = jobs
