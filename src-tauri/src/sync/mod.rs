@@ -179,7 +179,7 @@ impl SyncManager {
 
         let hostname = tauri_plugin_os::hostname();
         if hostname.trim().is_empty() {
-            return "EcoPaste".to_owned();
+            return "EcoPasteSync".to_owned();
         }
 
         hostname
@@ -192,7 +192,7 @@ impl SyncManager {
             device_id: self.device_id.clone(),
             name: self.effective_device_name(&settings),
             platform: current_platform_tag().to_owned(),
-            version: app.package_info().version.to_string(),
+            version: crate::core::version::display_version().to_owned(),
         }
     }
 

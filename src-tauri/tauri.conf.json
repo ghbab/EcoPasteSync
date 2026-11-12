@@ -24,7 +24,7 @@
         "minHeight": 600,
         "minWidth": 360,
         "skipTaskbar": true,
-        "title": "EcoPaste",
+        "title": "EcoPasteSync",
         "transparent": true,
         "url": "index.html/#/",
         "visible": false,
@@ -43,14 +43,14 @@
     "copyright": "Copyright 2026 ayangweb",
     "fileAssociations": [
       {
-        "description": "EcoPaste history backup",
+        "description": "EcoPasteSync history backup",
         "exportedType": {
           "conformsTo": ["public.data"],
           "identifier": "com.ayangweb.eco-paste.backup"
         },
         "ext": ["ecopastebak"],
         "mimeType": "application/vnd.ecopaste.backup",
-        "name": "EcoPaste Backup",
+        "name": "EcoPasteSync Backup",
         "role": "Editor"
       }
     ],
@@ -64,10 +64,10 @@
     "license": "Apache-2.0",
     "licenseFile": "../LICENSE",
     "resources": ["assets/tray.ico"],
-    "shortDescription": "EcoPaste",
+    "shortDescription": "EcoPasteSync",
     "targets": ["nsis", "dmg", "app"]
   },
   "identifier": "com.ayangweb.eco-paste",
-  "productName": "EcoPaste",
+  "productName": "EcoPasteSync",
   "version": "../package.json"
 }

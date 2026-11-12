@@ -279,7 +279,7 @@ pub fn build_preference_window(app_handle: &AppHandle) -> Result<()> {
         PREFERENCE_WINDOW_LABEL,
         WebviewUrl::App("index.html/#/preference".into()),
     )
-    .title("EcoPaste Preference")
+    .title("EcoPasteSync Preference")
     .inner_size(960.0, 600.0)
     .min_inner_size(960.0, 600.0)
     .center()
@@ -315,7 +315,7 @@ pub fn build_onboarding_window(app_handle: &AppHandle) -> Result<()> {
         ONBOARDING_WINDOW_LABEL,
         WebviewUrl::App("index.html/#/onboarding".into()),
     )
-    .title("EcoPaste Onboarding")
+    .title("EcoPasteSync Onboarding")
     .inner_size(900.0, 600.0)
     .center()
     .resizable(false)

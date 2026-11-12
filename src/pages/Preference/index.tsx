@@ -1,4 +1,4 @@
-import { getName, getVersion } from "@tauri-apps/api/app";
+import { getName } from "@tauri-apps/api/app";
 import { useMount } from "ahooks";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import type { ChangeEvent, FC } from "react";
@@ -19,6 +19,7 @@ import {
   takePendingPreferenceHighlight,
 } from "@/commands";
 import ScrollArea from "@/components/ScrollArea";
+import { APP_VERSION } from "@/constants/app";
 import { TAURI_EVENT } from "@/constants/events";
 import { useTauriListen } from "@/hooks/useTauriListen";
 import { settingsState } from "@/stores/settings";
@@ -250,13 +251,13 @@ const Preference: FC = () => {
   };
 
   /**
-   * 从 Tauri 应用元信息读取展示名称和版本，避免前端手写包信息。
+   * 读取 Tauri 应用名称，版本由 package.json 三段版本与发布序号拼接。
    */
   const initializeAppMetadata = async () => {
     try {
-      const [name, version] = await Promise.all([getName(), getVersion()]);
+      const name = await getName();
 
-      setAppMetadata({ name, version });
+      setAppMetadata({ name, version: APP_VERSION });
     } catch (error) {
       log.warn("load app metadata failed", error);
     }

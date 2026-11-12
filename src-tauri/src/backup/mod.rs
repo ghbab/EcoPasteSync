@@ -521,7 +521,7 @@ fn build_manifest(
     Ok(BackupManifest {
         format_version: FORMAT_VERSION,
         app_name: app.package_info().name.to_string(),
-        app_version: app.package_info().version.to_string(),
+        app_version: crate::core::version::display_version().to_owned(),
         exported_at,
         platform: current_platform().to_owned(),
         encryption: match mode {
@@ -830,7 +830,7 @@ fn read_backup_payload(path: &Path, password: Option<&str>) -> Result<Vec<u8>> {
         return Ok(bytes);
     }
     if !bytes.starts_with(MAGIC) {
-        return app_error("不是有效的 EcoPaste 备份文件");
+        return app_error("不是有效的 EcoPasteSync 备份文件");
     }
 
     let mut cursor = Cursor::new(bytes.as_slice());
@@ -928,7 +928,7 @@ fn inspect_backup_reader<R: Read>(reader: &mut R) -> Result<BackupContainerMode>
         return Ok(BackupContainerMode::Plain);
     }
 
-    app_error("不是有效的 EcoPaste 备份文件")
+    app_error("不是有效的 EcoPasteSync 备份文件")
 }
 
 fn read_container_header_after_magic<R: Read>(reader: &mut R) -> Result<ContainerHeader> {

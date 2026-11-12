@@ -1,14 +1,14 @@
 {
   "about": {
     "sponsor": "Sponsor",
-    "sponsorHint": "If EcoPaste helps your workflow, you can support the project.",
+    "sponsorHint": "If EcoPasteSync helps your workflow, you can support the project.",
     "sponsorQrAlt": "Sponsor QR code"
   },
   "backup": {
     "export": {
       "confirmPassword": "Confirm password",
       "confirmRequired": "Enter the backup password again",
-      "encryptedHint": "The backup will be encrypted with this password. EcoPaste will not save it, and forgotten passwords cannot be recovered.",
+      "encryptedHint": "The backup will be encrypted with this password. EcoPasteSync will not save it, and forgotten passwords cannot be recovered.",
       "modeEncrypted": "Encrypted backup (Recommended)",
       "modePlain": "Plain backup",
       "ok": "Choose Save Location",
@@ -22,11 +22,11 @@
       "plainConfirmRequired": "Confirm the plain backup risk",
       "plainWarning": "Anyone with the file can read the backup contents directly.",
       "plainWarningTitle": "Plain backups are not password protected",
-      "title": "Export EcoPaste Backup"
+      "title": "Export EcoPasteSync Backup"
     },
-    "fileFilter": "EcoPaste Backup",
+    "fileFilter": "EcoPasteSync Backup",
     "import": {
-      "fileFallback": "EcoPaste backup file",
+      "fileFallback": "EcoPasteSync backup file",
       "ok": "Import",
       "overwriteConfirm": "I have read the warning and confirm overwriting current data",
       "overwriteConfirmRequired": "Confirm the overwrite import risk",
@@ -35,11 +35,11 @@
       "overwriteWarning": "Overwrite import replaces the selected current data immediately. Merge import is safer for everyday recovery; use overwrite only when the backup should become the source of truth.",
       "password": "Backup password",
       "passwordRequired": "Enter the backup password",
-      "pickTitle": "Choose EcoPaste Backup",
+      "pickTitle": "Choose EcoPasteSync Backup",
       "strategy": "Import mode",
       "strategyMerge": "Merge Import",
       "strategyOverwrite": "Overwrite Import",
-      "title": "Import EcoPaste Backup",
+      "title": "Import EcoPasteSync Backup",
       "typeEncrypted": "Encrypted backup, password required",
       "typePlain": "Unencrypted backup"
     },
@@ -83,7 +83,7 @@
         "title": "Appearance & Language"
       },
       "backup": {
-        "description": "Export or import EcoPaste backup packages.",
+        "description": "Export or import EcoPasteSync backup packages.",
         "title": "Backup & Migration"
       },
       "capture": {
@@ -148,7 +148,7 @@
           "title": "GitHub"
         },
         "sponsor": {
-          "description": "If EcoPaste helps your workflow, you can support the project.",
+          "description": "If EcoPasteSync helps your workflow, you can support the project.",
           "title": "Sponsor"
         }
       },
@@ -193,7 +193,7 @@
           "title": "Maximum Image Height"
         },
         "language": {
-          "description": "Switch the EcoPaste interface language.",
+          "description": "Switch the EcoPasteSync interface language.",
           "options": {
             "en-US": "English",
             "zh-CN": "简体中文"
@@ -267,26 +267,26 @@
       },
       "control": {
         "autoStart": {
-          "description": "Start EcoPaste automatically after logging in.",
+          "description": "Start EcoPasteSync automatically after logging in.",
           "macos": {
-            "description": "Start EcoPaste automatically after login.",
+            "description": "Start EcoPasteSync automatically after login.",
             "title": "Launch at Login"
           },
           "title": "Launch at Login",
           "windows": {
-            "description": "Start EcoPaste automatically after login.",
+            "description": "Start EcoPasteSync automatically after login.",
             "title": "Launch at Startup"
           }
         },
         "dockIcon": {
-          "description": "Show the EcoPaste icon in the system desktop bar.",
+          "description": "Show the EcoPasteSync icon in the system desktop bar.",
           "macos": {
-            "description": "Show the EcoPaste icon in the Dock.",
+            "description": "Show the EcoPasteSync icon in the Dock.",
             "title": "Dock Icon"
           },
           "title": "Desktop Bar Icon",
           "windows": {
-            "description": "Show the EcoPaste icon in the taskbar.",
+            "description": "Show the EcoPasteSync icon in the taskbar.",
             "title": "Taskbar Icon"
           }
         },
@@ -296,14 +296,14 @@
           "title": "Reopen Onboarding"
         },
         "trayIcon": {
-          "description": "Show the EcoPaste icon in the system status area.",
+          "description": "Show the EcoPasteSync icon in the system status area.",
           "macos": {
-            "description": "Show the EcoPaste icon in the menu bar.",
+            "description": "Show the EcoPasteSync icon in the menu bar.",
             "title": "Menu Bar Icon"
           },
           "title": "Status Area Icon",
           "windows": {
-            "description": "Show the EcoPaste icon in the system tray.",
+            "description": "Show the EcoPasteSync icon in the system tray.",
             "title": "System Tray Icon"
           }
         }
@@ -461,7 +461,7 @@
           "title": "Accessibility Permission"
         },
         "adminRestartConfirm": {
-          "content": "EcoPaste needs to restart with administrator privileges for this change to take effect. Windows may show a User Account Control prompt.",
+          "content": "EcoPasteSync needs to restart with administrator privileges for this change to take effect. Windows may show a User Account Control prompt.",
           "ok": "Restart",
           "title": "Restart required"
         },
@@ -470,7 +470,7 @@
           "title": "Full Disk Access Permission"
         },
         "runAsAdministrator": {
-          "description": "Used to restart EcoPaste with administrator privileges and keep future launches elevated when needed.",
+          "description": "Used to restart EcoPasteSync with administrator privileges and keep future launches elevated when needed.",
           "title": "Run as Administrator"
         }
       },
@@ -534,7 +534,7 @@
           "title": "Open Preferences Window"
         },
         "winV": {
-          "description": "Press Win+V to summon EcoPaste instead of the Windows clipboard history panel.",
+          "description": "Press Win+V to summon EcoPasteSync instead of the Windows clipboard history panel.",
           "title": "Take Over Win+V"
         }
       },
@@ -599,7 +599,7 @@
           "unpairConfirm": "After unpairing, this device will no longer be able to sync the clipboard with this device."
         },
         "enabled": {
-          "description": "Pair with EcoPaste devices on the same LAN and sync the clipboard.",
+          "description": "Pair with EcoPasteSync devices on the same LAN and sync the clipboard.",
           "title": "Enable LAN Sync"
         },
         "fileMaxSize": {
@@ -728,7 +728,7 @@
     "open": "Open data directory",
     "pickTitle": "Choose New Data Directory Location",
     "reset": "Reset to default directory",
-    "resetConfirmContent": "EcoPaste will move the current history database, settings, and resource cache back to the default data directory, then delete the current custom data directory after migration succeeds.",
+    "resetConfirmContent": "EcoPasteSync will move the current history database, settings, and resource cache back to the default data directory, then delete the current custom data directory after migration succeeds.",
     "resetConfirmTitle": "Reset Data Directory"
   }
 }

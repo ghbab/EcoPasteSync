@@ -15,6 +15,7 @@ use tauri::{AppHandle, Manager};
 use tauri_plugin_opener::OpenerExt;
 
 use crate::clipboard::WatcherPause;
+use crate::core::version::display_version;
 use crate::core::Result;
 use crate::i18n::tray as tray_i18n;
 use crate::i18n::tray::Key;
@@ -24,7 +25,7 @@ use crate::window::CLIPBOARD_WINDOW_LABEL;
 use crate::window::{self, PREFERENCE_WINDOW_LABEL};
 
 const TRAY_ID: &str = "app-tray";
-const GITHUB_URL: &str = "https://github.com/EcoPasteHub/EcoPaste";
+const GITHUB_URL: &str = "https://github.com/ghbab/EcoPasterSync";
 
 const MENU_PREFERENCE: &str = "tray::preference";
 const MENU_TOGGLE_LISTEN: &str = "tray::toggle_listen";
@@ -34,20 +35,20 @@ const MENU_EXIT: &str = "tray::exit";
 
 pub fn init(app: &AppHandle, settings: &Settings) -> Result<()> {
     let lang = settings.appearance.language;
-    let version = app.package_info().version.to_string();
+    let version = display_version();
     let paused = app
         .try_state::<WatcherPause>()
         .map(|s| s.is_paused())
         .unwrap_or(false);
 
     let icon = load_icon(app)?;
-    let menu = build_menu(app, lang, &version, paused)?;
+    let menu = build_menu(app, lang, version, paused)?;
 
     let tray = TrayIconBuilder::with_id(TRAY_ID)
         .icon(icon)
         .icon_as_template(cfg!(target_os = "macos"))
         .show_menu_on_left_click(cfg!(target_os = "macos"))
-        .tooltip(format!("EcoPaste v{version}"))
+        .tooltip(format!("EcoPasteSync v{version}"))
         .menu(&menu)
         .on_menu_event(|app, event| handle_menu_event(app, event.id().as_ref()))
         .on_tray_icon_event(|tray, event| {
@@ -83,12 +84,12 @@ pub fn apply(app: &AppHandle, settings: &Settings) -> Result<()> {
     let Some(tray) = app.tray_by_id(TRAY_ID) else {
         return Ok(());
     };
-    let version = app.package_info().version.to_string();
+    let version = display_version();
     let paused = app
         .try_state::<WatcherPause>()
         .map(|s| s.is_paused())
         .unwrap_or(false);
-    let menu = build_menu(app, settings.appearance.language, &version, paused)?;
+    let menu = build_menu(app, settings.appearance.language, version, paused)?;
     tray.set_menu(Some(menu)).context("tray set_menu failed")?;
     tray.set_visible(settings.general.tray_icon)
         .context("tray set_visible failed")?;
@@ -104,12 +105,12 @@ fn rebuild_menu(app: &AppHandle) -> Result<()> {
         .try_state::<crate::settings::SettingsStore>()
         .map(|s| s.snapshot().appearance.language)
         .unwrap_or_default();
-    let version = app.package_info().version.to_string();
+    let version = display_version();
     let paused = app
         .try_state::<WatcherPause>()
         .map(|s| s.is_paused())
         .unwrap_or(false);
-    let menu = build_menu(app, lang, &version, paused)?;
+    let menu = build_menu(app, lang, version, paused)?;
     tray.set_menu(Some(menu)).context("tray set_menu failed")?;
     Ok(())
 }

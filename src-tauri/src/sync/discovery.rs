@@ -145,7 +145,7 @@ fn resolve_nearby_entry(info: &mdns_sd::ServiceInfo) -> Option<NearbyEntry> {
 
     let name = info
         .get_property_val_str("name")
-        .unwrap_or("EcoPaste")
+        .unwrap_or("EcoPasteSync")
         .to_string();
     let platform = info
         .get_property_val_str("platform")
