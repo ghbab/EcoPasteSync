@@ -2,13 +2,14 @@
 //!
 //! 两种触发时机共用本模块：
 //! - 条目内文件总大小不超过直接传输阈值 → 接收端在入库前立即拉取；
-//! - 超过阈值 → 只同步路径，粘贴时再按需拉取。
+//! - 超过阈值 → 只同步文件清单，粘贴时再按需拉取。
 //!
+//! 目录按「根目录 + 子树文件相对路径」重建：先建目录，再把每个子树文件拉进对应位置。
 //! 缓存目录按「远端路径列表」的 blake3 命名，重复接收同一批路径时复用同一目录。
 //! 传输不做断点续传：中途失败或用户取消一律丢弃半成品，下次从头再拉。
 
 use std::collections::{HashMap, HashSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{LazyLock, Mutex};
 
 use serde_json::json;
@@ -30,6 +31,17 @@ const MAX_FILE_NAME_CHARS: usize = 120;
 /// 正在拉取的条目 id：同一卡片连点会并发清空同一缓存目录，必须串行化。
 static TRANSFERRING: LazyLock<Mutex<HashSet<String>>> =
     LazyLock::new(|| Mutex::new(HashSet::new()));
+
+/// 单个待拉取文件的落盘计划。
+struct PullJob {
+    /// 发送端文件绝对路径，分块接口按此寻址。
+    source: String,
+    size: u64,
+    /// 发送端给出的整文件哈希；缺失时仅校验长度。
+    hash: Option<String>,
+    /// 本地缓存内的目标路径。
+    dest: PathBuf,
+}
 
 /// 单次条目传输的进度上下文；`item_id` 缺失时不上报进度。
 struct TransferTarget<'a> {
@@ -53,10 +65,11 @@ impl TransferTarget<'_> {
     }
 }
 
-/// 把远端条目涉及的文件全部拉到本地缓存目录，返回本地路径列表。
+/// 把远端条目涉及的文件全部拉到本地缓存目录，返回本地顶层路径列表。
 ///
-/// 调用方负责保证 `files` 中不含目录、每项都带 `size`；这里对不可传输的输入
-/// 直接报错，避免产生「有路径没有内容」的误导性缓存。
+/// 目录按其「根 + 子树相对路径」重建：先建目录，再把子树文件逐个拉进对应位置。
+/// 调用方需保证目录已被发送端完整枚举；这里对缺大小、非法相对路径或不可传输的
+/// 输入直接报错，避免产生「有路径没有内容」的误导性缓存。
 pub async fn pull_files(
     app: &AppHandle,
     remote_content: &str,
@@ -105,54 +118,138 @@ pub async fn pull_files(
         .await
         .map_err(|err| AppError::Other(anyhow::anyhow!("create {root:?} failed: {err}")))?;
 
+    // 清单按顶层条目归组：目录的子树文件也归到所属顶层目录下。
+    let top_paths = crate::sync::split_paths(remote_content);
+    let mut groups: Vec<Vec<&SyncFileEntryDto>> = vec![Vec::new(); top_paths.len()];
+
+    for entry in files {
+        let index = match entry.root_index {
+            Some(index) if index < top_paths.len() => index,
+            _ => match top_paths.iter().position(|path| path == &entry.path) {
+                Some(index) => index,
+                None => continue,
+            },
+        };
+        groups[index].push(entry);
+    }
+
     let mut names: HashMap<String, usize> = HashMap::new();
-    let mut local_paths = Vec::with_capacity(files.len());
-    let total_bytes = files
-        .iter()
-        .filter_map(|entry| entry.size)
-        .fold(0u64, |acc, size| {
-            if size > 0 {
-                acc.saturating_add(size as u64)
-            } else {
-                acc
+    let mut jobs: Vec<PullJob> = Vec::new();
+    let mut local_paths: Vec<String> = Vec::with_capacity(top_paths.len());
+
+    for (index, source) in top_paths.iter().enumerate() {
+        let name = unique_file_name(source, index, &mut names);
+        let local_root = root.join(&name);
+        let group = &groups[index];
+        let is_dir = group
+            .iter()
+            .any(|entry| entry.is_dir && entry.rel_path.is_none());
+
+        if is_dir {
+            // 目录根先落盘；空目录（没有子树文件）也会保留。
+            if let Err(err) = tokio::fs::create_dir_all(&local_root).await {
+                discard(&root).await;
+                return Err(AppError::Other(anyhow::anyhow!(
+                    "create {local_root:?} failed: {err}"
+                )));
             }
-        });
+
+            let mut children: Vec<&SyncFileEntryDto> = group
+                .iter()
+                .copied()
+                .filter(|entry| entry.rel_path.is_some())
+                .collect();
+            // 按相对路径排序，保证多文件写入顺序稳定、进度推进可预期。
+            children.sort_by(|left, right| left.rel_path.cmp(&right.rel_path));
+
+            for child in children {
+                let Some(rel_path) = child.rel_path.as_deref() else {
+                    continue;
+                };
+                let Some(dest) = join_rel_path(&local_root, rel_path) else {
+                    discard(&root).await;
+                    return Err(AppError::Other(anyhow::anyhow!(
+                        "invalid relative path from remote: {rel_path}"
+                    )));
+                };
+
+                // 子树目录（含空目录）先建好；文件稍后落到同一层级。
+                if child.is_dir {
+                    if let Err(err) = tokio::fs::create_dir_all(&dest).await {
+                        discard(&root).await;
+                        return Err(AppError::Other(anyhow::anyhow!(
+                            "create {dest:?} failed: {err}"
+                        )));
+                    }
+                    continue;
+                }
+
+                let Some(size) = child.size.filter(|size| *size >= 0) else {
+                    discard(&root).await;
+                    return Err(AppError::Other(anyhow::anyhow!(
+                        "file size is unknown: {}",
+                        child.path
+                    )));
+                };
+
+                if let Some(parent) = dest.parent() {
+                    if let Err(err) = tokio::fs::create_dir_all(parent).await {
+                        discard(&root).await;
+                        return Err(AppError::Other(anyhow::anyhow!(
+                            "create {parent:?} failed: {err}"
+                        )));
+                    }
+                }
+
+                jobs.push(PullJob {
+                    source: child.path.clone(),
+                    size: size as u64,
+                    hash: child.hash.clone(),
+                    dest,
+                });
+            }
+        } else {
+            let Some(entry) = group
+                .iter()
+                .find(|entry| !entry.is_dir && entry.rel_path.is_none())
+            else {
+                discard(&root).await;
+                return Err(AppError::Other(anyhow::anyhow!(
+                    "file fingerprint is missing: {source}"
+                )));
+            };
+            let Some(size) = entry.size.filter(|size| *size >= 0) else {
+                discard(&root).await;
+                return Err(AppError::Other(anyhow::anyhow!(
+                    "file size is unknown: {}",
+                    entry.path
+                )));
+            };
+
+            jobs.push(PullJob {
+                source: entry.path.clone(),
+                size: size as u64,
+                hash: entry.hash.clone(),
+                dest: local_root,
+            });
+        }
+
+        local_paths.push(local_root.to_string_lossy().into_owned());
+    }
+
+    let total_bytes: u64 = jobs
+        .iter()
+        .fold(0u64, |acc, job| acc.saturating_add(job.size));
     let mut transferred_base: u64 = 0;
 
-    for (index, entry) in files.iter().enumerate() {
-        if entry.is_dir {
-            discard(&root).await;
-            return Err(AppError::Other(anyhow::anyhow!(
-                "directory is not transferable: {}",
-                entry.path
-            )));
-        }
-        let Some(size) = entry.size.filter(|size| *size >= 0) else {
-            discard(&root).await;
-            return Err(AppError::Other(anyhow::anyhow!(
-                "file size is unknown: {}",
-                entry.path
-            )));
-        };
-
-        let name = unique_file_name(&entry.path, index, &mut names);
-        let local_path = root.join(&name);
+    for job in &jobs {
         let target = item_id.map(|item_id| TransferTarget {
             app,
             item_id,
             transferred_base,
             total_bytes,
         });
-        let pulled = pull_one_file(
-            app,
-            &device.shared_key,
-            &address,
-            entry,
-            size as u64,
-            &local_path,
-            target.as_ref(),
-        )
-        .await;
+        let pulled = pull_one_file(app, &device.shared_key, &address, job, target.as_ref()).await;
 
         if let Err(err) = pulled {
             // 任一文件失败即整体放弃：保留半套文件会让粘贴内容不完整。
@@ -160,8 +257,7 @@ pub async fn pull_files(
             return Err(err);
         }
 
-        transferred_base = transferred_base.saturating_add(size as u64);
-        local_paths.push(local_path.to_string_lossy().into_owned());
+        transferred_base = transferred_base.saturating_add(job.size);
     }
 
     Ok(local_paths)
@@ -269,13 +365,13 @@ pub async fn ensure_item_files(
     }
 }
 
-/// 读取并校验缓存的本地路径：全部文件仍存在才算命中。
+/// 读取并校验缓存的本地路径：全部顶层路径（文件或目录）仍存在才算命中。
 fn read_local_paths(raw: Option<&str>) -> Option<Vec<String>> {
     let paths: Vec<String> = serde_json::from_str(raw?).ok()?;
     if paths.is_empty() {
         return None;
     }
-    if !paths.iter().all(|path| Path::new(path).is_file()) {
+    if !paths.iter().all(|path| Path::new(path).exists()) {
         return None;
     }
 
@@ -316,11 +412,10 @@ async fn pull_one_file(
     app: &AppHandle,
     shared_key: &str,
     address: &str,
-    entry: &SyncFileEntryDto,
-    size: u64,
-    local_path: &Path,
+    job: &PullJob,
     target: Option<&TransferTarget<'_>>,
 ) -> Result<()> {
+    let local_path = job.dest.as_path();
     let mut file = tokio::fs::File::create(local_path)
         .await
         .map_err(|err| AppError::Other(anyhow::anyhow!("create {local_path:?} failed: {err}")))?;
@@ -328,16 +423,16 @@ async fn pull_one_file(
     let mut hasher = blake3::Hasher::new();
     let mut offset: u64 = 0;
 
-    while offset < size {
-        let len = (size - offset).min(FILE_CHUNK_SIZE as u64);
+    while offset < job.size {
+        let len = (job.size - offset).min(FILE_CHUNK_SIZE as u64);
         let chunk =
-            client::fetch_file_chunk(app, shared_key, address, &entry.path, offset, len).await?;
+            client::fetch_file_chunk(app, shared_key, address, &job.source, offset, len).await?;
 
         // 对端返回的长度与请求不一致说明源文件已变化，立即失败而不是写入错位内容。
         if chunk.len() as u64 != len {
             return Err(AppError::Other(anyhow::anyhow!(
                 "file {} chunk {offset}..{} returned {} bytes",
-                entry.path,
+                job.source,
                 offset + len,
                 chunk.len()
             )));
@@ -359,12 +454,12 @@ async fn pull_one_file(
         .map_err(|err| AppError::Other(anyhow::anyhow!("flush {local_path:?} failed: {err}")))?;
 
     // 发送端只对需要按需拉取的条目采集整文件哈希，缺失时仅以长度为准。
-    if let Some(expected) = entry.hash.as_deref() {
+    if let Some(expected) = job.hash.as_deref() {
         let actual = hasher.finalize().to_hex().to_string();
         if actual != expected {
             return Err(AppError::Other(anyhow::anyhow!(
                 "file {} checksum mismatch",
-                entry.path
+                job.source
             )));
         }
     }
@@ -377,6 +472,31 @@ async fn discard(root: &Path) {
     if let Err(err) = tokio::fs::remove_dir_all(root).await {
         log::warn!("sync file transfer: discard {root:?} failed: {err}");
     }
+}
+
+/// 把远端相对路径安全拼到本地目录下。
+///
+/// 拒绝绝对路径、`.` / `..` 与空段，防止远端清单把文件写到缓存目录之外；
+/// 每段仍走 [`sanitize_file_name`] 过滤跨平台非法字符与保留设备名。
+fn join_rel_path(root: &Path, rel_path: &str) -> Option<PathBuf> {
+    let mut path = root.to_path_buf();
+
+    for part in rel_path.split('/') {
+        if part.is_empty() || part == "." || part == ".." {
+            return None;
+        }
+        let name = sanitize_file_name(part);
+        if name.is_empty() {
+            return None;
+        }
+        path.push(name);
+    }
+
+    if path == root {
+        return None;
+    }
+
+    Some(path)
 }
 
 /// 生成缓存内文件名：保留原名便于识别，过滤跨平台非法字符，同批次重名追加序号。
@@ -505,5 +625,41 @@ mod tests {
         ));
 
         discard(&root).await;
+    }
+
+    #[test]
+    fn join_rel_path_builds_nested_path_under_root() {
+        let root = Path::new("/tmp/cache/item-1");
+
+        assert_eq!(
+            join_rel_path(root, "docs/2024/a.txt"),
+            Some(PathBuf::from("/tmp/cache/item-1/docs/2024/a.txt"))
+        );
+        assert_eq!(
+            join_rel_path(root, "a.txt"),
+            Some(PathBuf::from("/tmp/cache/item-1/a.txt"))
+        );
+    }
+
+    #[test]
+    fn join_rel_path_rejects_escaping_segments() {
+        let root = Path::new("/tmp/cache/item-1");
+
+        // 目录穿越、绝对路径与空段一律拒绝，避免写到缓存目录之外。
+        assert_eq!(join_rel_path(root, "../secret.txt"), None);
+        assert_eq!(join_rel_path(root, "docs/../../secret.txt"), None);
+        assert_eq!(join_rel_path(root, "/etc/passwd"), None);
+        assert_eq!(join_rel_path(root, "docs//a.txt"), None);
+        assert_eq!(join_rel_path(root, ""), None);
+    }
+
+    #[test]
+    fn join_rel_path_sanitizes_invalid_chars() {
+        let root = Path::new("/tmp/cache/item-1");
+
+        assert_eq!(
+            join_rel_path(root, "docs/a:b.txt"),
+            Some(PathBuf::from("/tmp/cache/item-1/docs/a_b.txt"))
+        );
     }
 }

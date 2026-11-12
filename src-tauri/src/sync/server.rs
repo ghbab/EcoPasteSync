@@ -27,7 +27,7 @@ use crate::sync::protocol::{
     API_PAIR_STATUS, FILE_CHUNK_SIZE, HEADER_DEVICE_ID, HEADER_SIGNATURE, HEADER_TIMESTAMP,
     PULL_PAGE_LIMIT,
 };
-use crate::sync::{item_to_dto, split_paths, SyncManager};
+use crate::sync::{collect_shared_paths, item_to_dto, SyncManager};
 
 /// 服务器共享上下文（路由 State）。
 pub struct ServerCtx {
@@ -322,7 +322,7 @@ async fn handle_pull(
         if item.kind == crate::db::models::ClipboardKind::Files
             && item.sync_source_device_id.is_none()
         {
-            shared_paths.extend(split_paths(&item.content));
+            shared_paths.extend(collect_shared_paths(&item.content));
         }
     }
     ctx.manager.remember_shared_paths(&shared_paths);

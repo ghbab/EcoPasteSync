@@ -24,6 +24,7 @@ mod server;
 
 use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, SocketAddr};
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
@@ -59,8 +60,12 @@ const PROBE_INTERVAL: Duration = Duration::from_secs(30);
 const IDENTITY_FILE: &str = "sync-identity.json";
 /// 文件指纹只读头部这么多字节：足以发现文件被替换 / 截断，成本与文件大小无关。
 const FILE_HEAD_HASH_BYTES: u64 = 64 * 1024;
-/// 单条 files 条目最多采集多少个文件指纹；超出部分只带路径，避免超大目录拖慢广播。
+/// 单条 files 条目最多采集多少个顶层路径；超出部分接收端按「仅路径可用」处理。
 const FILE_FINGERPRINT_LIMIT: usize = 64;
+/// 目录条目最多展开多少个条目（文件与子目录都计数）；超出即标记该目录不完整。
+const DIR_FILE_LIMIT: usize = 4096;
+/// 目录递归深度上限，避免异常目录结构拖垮枚举。
+const DIR_DEPTH_LIMIT: usize = 32;
 /// 对外共享的文件路径授权保留时长：超时后对端不能再拉取，需要重新复制一次。
 const SHARED_PATH_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 /// 共享授权表的容量上限，避免长期运行无限增长。
@@ -739,9 +744,9 @@ pub async fn maybe_broadcast_item(app: &AppHandle, item: &ClipboardItem) {
         megabytes_to_bytes(settings.sync.file_threshold),
         megabytes_to_bytes(settings.sync.file_max_size),
     );
-    if item.kind == ClipboardKind::Files {
-        // 只登记本机真实共享出去的路径，供对端按需拉取时校验。
-        manager.remember_shared_paths(&split_paths(&item.content));
+    if item.kind == ClipboardKind::Files && item.sync_source_device_id.is_none() {
+        // 只登记本机真实共享出去的路径（含目录内文件），供对端按需拉取时校验。
+        manager.remember_shared_paths(&collect_shared_paths(&item.content));
     }
 
     for device in targets {
@@ -781,12 +786,80 @@ enum IncomingFiles {
     },
 }
 
+/// 单个顶层条目在接收端的传输计划。
+struct IncomingRoot<'a> {
+    /// 顶层条目是否为目录。
+    is_dir: bool,
+    /// 目录是否已由发送端完整枚举；非目录恒为 `true`。
+    complete: bool,
+    /// 可直接拉取的文件条目：顶层文件自身，或目录子树文件。
+    files: Vec<&'a SyncFileEntryDto>,
+}
+
+/// 把文件清单按顶层条目归组，并标记目录是否可完整重建。
+///
+/// 新版本发送端带 `root_index`，直接按序号归组；旧版本没有该字段，回退为按
+/// 路径与顶层路径相等匹配。无法归属的条目直接忽略（对应顶层条目会判为不可传输）。
+fn group_incoming_roots<'a>(content: &str, files: &'a [SyncFileEntryDto]) -> Vec<IncomingRoot<'a>> {
+    let top_paths: Vec<&str> = content
+        .split('\n')
+        .filter(|path| !path.is_empty())
+        .collect();
+    let mut groups: Vec<Vec<&SyncFileEntryDto>> = vec![Vec::new(); top_paths.len()];
+
+    for entry in files {
+        let index = match entry.root_index {
+            Some(index) if index < top_paths.len() => index,
+            _ => match top_paths
+                .iter()
+                .position(|path| *path == entry.path.as_str())
+            {
+                Some(index) => index,
+                None => continue,
+            },
+        };
+        groups[index].push(entry);
+    }
+
+    let mut roots = Vec::with_capacity(groups.len());
+    for group in groups {
+        let dir_root = group
+            .iter()
+            .find(|entry| entry.is_dir && entry.rel_path.is_none());
+        let is_dir = dir_root.is_some();
+        // 旧版本发送端不会带 complete 标记，按不完整处理，保持「仅路径可用」。
+        let complete = match dir_root {
+            Some(entry) => entry.complete == Some(true),
+            None => true,
+        };
+        let children = group
+            .iter()
+            .copied()
+            .filter(|entry| {
+                if entry.is_dir && entry.rel_path.is_none() {
+                    // 目录根自身不是可拉取文件。
+                    return false;
+                }
+                entry.rel_path.is_some() == is_dir
+            })
+            .collect();
+
+        roots.push(IncomingRoot {
+            is_dir,
+            complete,
+            files: children,
+        });
+    }
+
+    roots
+}
+
 /// 决定 incoming files 条目是否需要把字节落到本机。
 ///
-/// 分档依据是「条目内文件总大小」：
+/// 分档依据是「条目内文件总大小」（目录按子树文件大小累加）：
 /// - 不超过直接传输阈值 → 立即拉取，粘贴时无需等待；
 /// - 超过阈值但不超过传输上限 → 只记 `Pending`，粘贴时再按需拉取；
-/// - 含目录、指纹不完整或超过上限 → `Unavailable`，仅保留远端路径。
+/// - 目录无法完整枚举、指纹不完整或超过上限 → `Unavailable`，仅保留远端路径。
 async fn resolve_incoming_files(
     app: &AppHandle,
     source_device_id: &str,
@@ -797,21 +870,28 @@ async fn resolve_incoming_files(
         return IncomingFiles::Ignore;
     }
 
-    let file_count = files.len() as i64;
-    let total_bytes = files
-        .iter()
-        .filter_map(|entry| entry.size)
-        .fold(0i64, i64::saturating_add);
+    let top_paths: Vec<&str> = dto
+        .content
+        .split('\n')
+        .filter(|path| !path.is_empty())
+        .collect();
+    let roots = group_incoming_roots(&dto.content, files);
+    if roots.is_empty() {
+        return IncomingFiles::Ignore;
+    }
 
-    // 路径在本机已存在且大小一致（同机复制或已拉取过）时无需任何传输。
+    // 顶层路径在本机已存在且大小一致（同机复制或已拉取过）时无需任何传输。
     // 只比存在性不够：两台机器可能有同名同路径但内容不同的文件。
-    let all_local = files.iter().all(|entry| {
-        let Ok(meta) = std::fs::metadata(&entry.path) else {
+    let all_local = roots.iter().zip(&top_paths).all(|(root, path)| {
+        let Ok(meta) = std::fs::metadata(path) else {
             return false;
         };
-        if entry.is_dir {
+        if root.is_dir {
             return meta.is_dir();
         }
+        let Some(entry) = root.files.first() else {
+            return false;
+        };
         match entry.size {
             Some(size) => meta.is_file() && meta.len() as i64 == size,
             None => meta.is_file(),
@@ -821,23 +901,47 @@ async fn resolve_incoming_files(
         return IncomingFiles::Ignore;
     }
 
-    // 目录暂不做递归传输；指纹不完整（缺路径或缺大小）也无法按块拉取。
-    let path_count = dto
-        .content
-        .split('\n')
-        .filter(|path| !path.is_empty())
-        .count();
-    let fingerprints_complete = path_count == files.len()
-        && files
-            .iter()
-            .all(|entry| entry.is_dir || entry.size.is_some());
-    let has_dir = files.iter().any(|entry| entry.is_dir);
+    // 目录必须完整枚举（含子树大小）才能按块重建；顶层文件缺指纹同样只能保留路径。
+    let mut transferable = true;
+    let mut total_bytes: i64 = 0;
+    let mut file_count: i64 = 0;
+
+    for root in &roots {
+        if root.is_dir && !root.complete {
+            transferable = false;
+            break;
+        }
+        if root.files.is_empty() && !root.is_dir {
+            transferable = false;
+            break;
+        }
+
+        for entry in &root.files {
+            // 目录条目只用于还原目录结构，没有字节大小。
+            if entry.is_dir {
+                continue;
+            }
+            match entry.size {
+                Some(size) if size >= 0 => {
+                    total_bytes = total_bytes.saturating_add(size);
+                    file_count = file_count.saturating_add(1);
+                }
+                _ => {
+                    transferable = false;
+                    break;
+                }
+            }
+        }
+        if !transferable {
+            break;
+        }
+    }
 
     let settings = app.state::<SettingsStore>().snapshot();
     let threshold_bytes = megabytes_to_bytes(settings.sync.file_threshold);
     let max_bytes = megabytes_to_bytes(settings.sync.file_max_size);
 
-    if has_dir || !fingerprints_complete || total_bytes as u64 > max_bytes {
+    if !transferable || total_bytes as u64 > max_bytes {
         return IncomingFiles::Deferred {
             state: SyncFileState::Unavailable,
             total_bytes,
@@ -1257,10 +1361,32 @@ fn parse_sub_kind_tag(tag: &str) -> ClipboardSubKind {
     }
 }
 
+/// 目录展开出的单个条目（尚未附带整文件哈希）。
+struct GatheredFile {
+    /// 条目在本机的绝对路径，接收端按此请求分块。
+    source: String,
+    /// 相对顶层目录的路径（`/` 分隔）；顶层文件为 `None`。
+    rel_path: Option<String>,
+    /// 是否为目录（嵌套空目录也需要在接收端还原）。
+    is_dir: bool,
+    size: i64,
+    mtime_ms: Option<i64>,
+}
+
+/// 单个顶层条目的枚举结果。
+struct GatheredRoot {
+    source: String,
+    is_dir: bool,
+    /// 目录是否完整枚举；普通文件恒为 `true`。
+    complete: bool,
+    files: Vec<GatheredFile>,
+}
+
 /// 采集 files 条目的传输指纹（大小 / 修改时间 / 头部哈希 / 整文件哈希）。
 ///
-/// 目录、不可读路径以及超出 [`FILE_FINGERPRINT_LIMIT`] 的文件只带 `path`；
-/// 接收端见到缺失指纹即按「仅路径可用」处理，不会误判为可拉取。
+/// 目录会递归展开：目录本身一条 `is_dir` 记录，子树文件各带相对路径。
+/// 超出 [`DIR_FILE_LIMIT`]、超过深度上限、含符号链接或读取失败时把目录标记为
+/// 不完整，接收端据此退化为「仅路径可用」，不会误判为可拉取。
 ///
 /// 整文件哈希只在该条目需要按需拉取（文件总大小超过 `inline_threshold_bytes`
 /// 且不超过 `max_bytes`）时计算：它要完整顺序读一遍文件，小文件内联传输不需要
@@ -1279,52 +1405,277 @@ fn collect_file_fingerprints(
         return None;
     }
 
-    let metas: Vec<Option<std::fs::Metadata>> = paths
-        .iter()
-        .map(|path| std::fs::metadata(path).ok())
-        .collect();
-    let total_bytes: u64 = metas
-        .iter()
-        .flatten()
-        .filter(|meta| meta.is_file())
-        .map(std::fs::Metadata::len)
-        .sum();
+    let mut remaining_files = DIR_FILE_LIMIT;
+    let mut roots: Vec<GatheredRoot> = Vec::with_capacity(paths.len());
+    let mut total_bytes: u64 = 0;
+
+    for path in paths {
+        let meta = std::fs::metadata(path).ok();
+        match meta {
+            Some(meta) if meta.is_dir() => {
+                let mut files = Vec::new();
+                let complete = walk_directory(path, &mut files, &mut remaining_files);
+                for file in &files {
+                    total_bytes = total_bytes.saturating_add(file.size.max(0) as u64);
+                }
+                roots.push(GatheredRoot {
+                    source: path.to_owned(),
+                    is_dir: true,
+                    complete,
+                    files,
+                });
+            }
+            Some(meta) => {
+                let size = meta.len() as i64;
+                total_bytes = total_bytes.saturating_add(size.max(0) as u64);
+                roots.push(GatheredRoot {
+                    source: path.to_owned(),
+                    is_dir: false,
+                    complete: true,
+                    files: vec![GatheredFile {
+                        source: path.to_owned(),
+                        rel_path: None,
+                        is_dir: false,
+                        size,
+                        mtime_ms: file_mtime_ms(&meta),
+                    }],
+                });
+            }
+            // 元信息不可读：不产出文件条目，接收端按「仅路径可用」处理。
+            None => roots.push(GatheredRoot {
+                source: path.to_owned(),
+                is_dir: false,
+                complete: false,
+                files: Vec::new(),
+            }),
+        }
+    }
+
     let need_integrity_hash = total_bytes > inline_threshold_bytes && total_bytes <= max_bytes;
+    let mut entries = Vec::new();
 
-    let entries = paths
-        .into_iter()
-        .zip(metas)
-        .map(|(path, meta)| {
-            let is_dir = meta.as_ref().is_some_and(std::fs::Metadata::is_dir);
+    for (index, root) in roots.into_iter().enumerate() {
+        if root.is_dir {
+            // 目录根只带路径与完整标记，字节由子树文件承担。
+            entries.push(SyncFileEntryDto {
+                path: root.source,
+                is_dir: true,
+                size: None,
+                mtime_ms: None,
+                head_hash: None,
+                hash: None,
+                root_index: Some(index),
+                rel_path: None,
+                complete: Some(root.complete),
+            });
+        }
 
-            // 目录不参与字节传输，只带路径；文件缺失时也只剩路径。
-            if is_dir || meta.is_none() {
-                return SyncFileEntryDto {
-                    path: path.to_owned(),
-                    is_dir,
+        for file in root.files {
+            let GatheredFile {
+                source,
+                rel_path,
+                is_dir,
+                size,
+                mtime_ms,
+            } = file;
+
+            if is_dir {
+                // 嵌套目录：只带相对路径，接收端据此还原空目录结构。
+                entries.push(SyncFileEntryDto {
+                    path: source,
+                    is_dir: true,
                     size: None,
                     mtime_ms: None,
                     head_hash: None,
                     hash: None,
-                };
+                    root_index: Some(index),
+                    rel_path,
+                    complete: None,
+                });
+                continue;
             }
 
-            SyncFileEntryDto {
-                path: path.to_owned(),
-                is_dir,
-                size: meta.as_ref().map(|meta| meta.len() as i64),
-                mtime_ms: meta.as_ref().and_then(file_mtime_ms),
-                head_hash: head_hash(path),
-                hash: if need_integrity_hash {
-                    file_hash(path)
-                } else {
-                    None
-                },
-            }
-        })
-        .collect();
+            // 子树文件可能很多，不再计算头部哈希，避免复制大目录时反复读盘。
+            let head_digest = if rel_path.is_none() {
+                head_hash(&source)
+            } else {
+                None
+            };
+            let hash = if need_integrity_hash {
+                file_hash(&source)
+            } else {
+                None
+            };
+
+            entries.push(SyncFileEntryDto {
+                path: source,
+                is_dir: false,
+                size: Some(size),
+                mtime_ms,
+                head_hash: head_digest,
+                hash,
+                root_index: Some(index),
+                rel_path,
+                complete: None,
+            });
+        }
+    }
 
     Some(entries)
+}
+
+/// 递归枚举目录内容（文件与子目录）；返回是否完整（未超限、无符号链接、无读取错误）。
+fn walk_directory(root: &str, out: &mut Vec<GatheredFile>, remaining: &mut usize) -> bool {
+    walk_directory_inner(Path::new(root), Path::new(""), 0, out, remaining)
+}
+
+/// [`walk_directory`] 的递归实现；`rel_prefix` 是相对目录根的路径。
+fn walk_directory_inner(
+    dir: &Path,
+    rel_prefix: &Path,
+    depth: usize,
+    out: &mut Vec<GatheredFile>,
+    remaining: &mut usize,
+) -> bool {
+    if depth >= DIR_DEPTH_LIMIT {
+        return false;
+    }
+
+    let reader = match std::fs::read_dir(dir) {
+        Ok(reader) => reader,
+        Err(_) => return false,
+    };
+    let mut complete = true;
+
+    for entry in reader {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(_) => {
+                complete = false;
+                continue;
+            }
+        };
+        let file_type = match entry.file_type() {
+            Ok(file_type) => file_type,
+            Err(_) => {
+                complete = false;
+                continue;
+            }
+        };
+        // 符号链接可能成环或指向目录外，统一不传输。
+        if file_type.is_symlink() {
+            complete = false;
+            continue;
+        }
+
+        let path = entry.path();
+        let rel = rel_prefix.join(entry.file_name());
+
+        if file_type.is_dir() {
+            if *remaining == 0 {
+                return false;
+            }
+            // 嵌套目录本身也进清单：空目录没有子文件，只能靠这条还原本地结构。
+            if let Some(rel_path) = relative_path_string(&rel) {
+                out.push(GatheredFile {
+                    source: path.to_string_lossy().into_owned(),
+                    rel_path: Some(rel_path),
+                    is_dir: true,
+                    size: 0,
+                    mtime_ms: None,
+                });
+                *remaining -= 1;
+            } else {
+                complete = false;
+            }
+
+            if !walk_directory_inner(&path, &rel, depth + 1, out, remaining) {
+                complete = false;
+            }
+            continue;
+        }
+        if !file_type.is_file() {
+            complete = false;
+            continue;
+        }
+        if *remaining == 0 {
+            return false;
+        }
+
+        let meta = match entry.metadata() {
+            Ok(meta) => meta,
+            Err(_) => {
+                complete = false;
+                continue;
+            }
+        };
+        let Some(rel_path) = relative_path_string(&rel) else {
+            complete = false;
+            continue;
+        };
+
+        out.push(GatheredFile {
+            source: path.to_string_lossy().into_owned(),
+            rel_path: Some(rel_path),
+            is_dir: false,
+            size: meta.len() as i64,
+            mtime_ms: file_mtime_ms(&meta),
+        });
+        *remaining -= 1;
+    }
+
+    complete
+}
+
+/// 把相对路径渲染成 `a/b/c` 形式；含非 UTF-8 组件时返回 `None`。
+fn relative_path_string(path: &Path) -> Option<String> {
+    let mut parts: Vec<String> = Vec::new();
+
+    for component in path.components() {
+        match component {
+            std::path::Component::Normal(part) => parts.push(part.to_str()?.to_owned()),
+            _ => return None,
+        }
+    }
+
+    if parts.is_empty() {
+        return None;
+    }
+
+    Some(parts.join("/"))
+}
+
+/// 展开 files 条目的对外共享路径：顶层路径 + 目录内全部文件。
+///
+/// 仅用于登记允许对端分块读取的路径；目录本身不能按块读取，故只登记文件。
+pub(crate) fn collect_shared_paths(content: &str) -> Vec<String> {
+    let mut shared = Vec::new();
+    let mut remaining_files = DIR_FILE_LIMIT;
+
+    for path in content
+        .split('\n')
+        .filter(|path| !path.is_empty())
+        .take(FILE_FINGERPRINT_LIMIT)
+    {
+        let meta = std::fs::metadata(path).ok();
+        match meta {
+            Some(meta) if meta.is_dir() => {
+                let mut files = Vec::new();
+                walk_directory(path, &mut files, &mut remaining_files);
+                for file in files {
+                    // 目录本身不能按块读取，只登记文件。
+                    if file.is_dir {
+                        continue;
+                    }
+                    shared.push(file.source);
+                }
+            }
+            Some(_) => shared.push(path.to_owned()),
+            None => {}
+        }
+    }
+
+    shared
 }
 
 /// 文件修改时间（Unix 毫秒）；系统不支持或时间早于纪元时返回 `None`。
@@ -1417,4 +1768,99 @@ fn load_or_create_identity(app: &AppHandle) -> Result<String> {
     std::fs::write(&path, content)
         .map_err(|err| AppError::Other(anyhow::anyhow!("write identity failed: {err}")))?;
     Ok(identity.device_id)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 构造一条文件清单条目，供归组测试复用。
+    fn sample_entry(
+        path: &str,
+        is_dir: bool,
+        root_index: Option<usize>,
+        rel_path: Option<&str>,
+        complete: Option<bool>,
+    ) -> SyncFileEntryDto {
+        SyncFileEntryDto {
+            path: path.to_owned(),
+            is_dir,
+            size: if is_dir { None } else { Some(1) },
+            mtime_ms: None,
+            head_hash: None,
+            hash: None,
+            root_index,
+            rel_path: rel_path.map(str::to_owned),
+            complete,
+        }
+    }
+
+    #[test]
+    fn collect_file_fingerprints_expands_directory_tree() {
+        let root = std::env::temp_dir().join(format!("ecopaste-sync-dir-{}", uuid::Uuid::new_v4()));
+        let nested = root.join("nested");
+        std::fs::create_dir_all(&nested).expect("create nested dir");
+        std::fs::write(root.join("a.txt"), b"a").expect("write a.txt");
+        std::fs::write(nested.join("b.txt"), b"bb").expect("write b.txt");
+
+        let entries =
+            collect_file_fingerprints(root.to_str().expect("utf8 root"), 5, 10).expect("manifest");
+
+        // 目录根 + 一个子目录 + 两个文件。
+        assert_eq!(entries.len(), 4);
+        assert!(entries[0].is_dir);
+        assert_eq!(entries[0].complete, Some(true));
+        assert_eq!(entries[0].root_index, Some(0));
+
+        let rels: Vec<&str> = entries
+            .iter()
+            .filter_map(|entry| entry.rel_path.as_deref())
+            .collect();
+        assert_eq!(rels.len(), 3);
+        assert!(rels.contains(&"nested"));
+        assert!(rels.contains(&"a.txt"));
+        assert!(rels.contains(&"nested/b.txt"));
+
+        let nested_dir = entries
+            .iter()
+            .find(|entry| entry.rel_path.as_deref() == Some("nested"))
+            .expect("nested dir entry");
+        assert!(nested_dir.is_dir);
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn group_incoming_roots_collects_directory_children() {
+        let files = vec![
+            sample_entry("/src/photos", true, Some(0), None, Some(true)),
+            sample_entry("/src/photos/a.jpg", false, Some(0), Some("a.jpg"), None),
+            sample_entry(
+                "/src/photos/sub/b.jpg",
+                false,
+                Some(0),
+                Some("sub/b.jpg"),
+                None,
+            ),
+        ];
+
+        let roots = group_incoming_roots("/src/photos", &files);
+
+        assert_eq!(roots.len(), 1);
+        assert!(roots[0].is_dir);
+        assert!(roots[0].complete);
+        assert_eq!(roots[0].files.len(), 2);
+    }
+
+    #[test]
+    fn group_incoming_roots_treats_legacy_directory_as_incomplete() {
+        // 旧版本发送端的目录条目没有 root_index / complete，只能按仅路径处理。
+        let files = vec![sample_entry("/src/photos", true, None, None, None)];
+
+        let roots = group_incoming_roots("/src/photos", &files);
+
+        assert_eq!(roots.len(), 1);
+        assert!(roots[0].is_dir);
+        assert!(!roots[0].complete);
+    }
 }

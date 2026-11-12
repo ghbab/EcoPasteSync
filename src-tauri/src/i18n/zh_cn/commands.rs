@@ -8,7 +8,7 @@ pub fn label(key: Key) -> &'static str {
         Key::DragTextEmpty => "文本内容为空",
         Key::ExternalUrlUnsupported => "只能打开 http 或 https 开头的链接",
         Key::SyncDisabled => "同步未开启",
-        Key::SyncFileUnavailable => "该远端文件无法传输（可能超出上限或是目录）",
+        Key::SyncFileUnavailable => "该远端文件无法传输（可能超出大小上限或文件过多）",
         Key::SyncFileTransferFailed => "远端文件传输失败",
         Key::SyncFileTransferBusy => "该文件正在传输，请稍候",
     }

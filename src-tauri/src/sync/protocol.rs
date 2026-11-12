@@ -98,10 +98,11 @@ pub fn file_chunk_signature_target(path: &str, offset: u64, len: u64) -> String 
     format!("{API_FILE_CHUNK}|{digest}|{offset}|{len}")
 }
 
-/// 单个文件的传输指纹。
+/// 单个文件的传输指纹（目录会被递归展开为「目录根 + 子树文件」多条记录）。
 ///
-/// 目录、不可读路径以及超出采集上限的文件只带 `path`：接收端见到缺失指纹即按
-/// 「仅路径可用」处理，不会误判为可拉取。
+/// 目录根记录带 `is_dir = true`、`complete` 标记是否完整枚举；子树文件带
+/// `rel_path` 表示相对目录根的路径。不可读路径以及超出采集上限的条目只带
+/// `path`：接收端见到缺失指纹即按「仅路径可用」处理，不会误判为可拉取。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SyncFileEntryDto {
@@ -116,6 +117,15 @@ pub struct SyncFileEntryDto {
     /// 整文件 blake3 hex；只对需要按需拉取的条目采集，拉取完成后用它校验完整性。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hash: Option<String>,
+    /// 所属顶层条目在 `content` 中的序号；旧版本发送端没有该字段。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub root_index: Option<usize>,
+    /// 目录子树文件的相对路径（`/` 分隔）；顶层条目或普通文件为 `None`。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rel_path: Option<String>,
+    /// 目录是否已完整枚举；超限、含符号链接或读取失败时为 `false`。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub complete: Option<bool>,
 }
 
 /// 一条待同步的剪贴板条目（加密载荷的明文结构）。
