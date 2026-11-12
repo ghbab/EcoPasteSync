@@ -10,7 +10,7 @@ use crate::db::models::{
 
 const SELECT_ITEM: &str = "SELECT id, kind, sub_kind, group_id, source_app_id, content, \
      content_hash, search_text, summary, file_types, size, width, height, use_count, is_favorite, is_pinned, \
-     is_sensitive, platform, sync_source_device_id, note, created_at, updated_at FROM clipboard_items";
+     is_sensitive, platform, NULL AS sync_source_device_id, note, created_at, updated_at FROM clipboard_items";
 
 /// 列表/单条刷新场景的精简 SELECT：text 类型条目的 `content` 与 `search_text` 一律置空，
 /// 由前端用 `summary` 渲染。HTML/RTF/长纯文本可能很大（用户复制整段文档），
@@ -28,7 +28,7 @@ const LIST_SELECT_ITEM: &str = "SELECT clipboard_items.id, clipboard_items.kind,
      clipboard_items.width, clipboard_items.height, clipboard_items.use_count, \
      clipboard_items.is_favorite, clipboard_items.is_pinned, \
      clipboard_items.is_sensitive, \
-     clipboard_items.platform, clipboard_items.sync_source_device_id, clipboard_items.note, \
+     clipboard_items.platform, NULL AS sync_source_device_id, clipboard_items.note, \
      clipboard_items.created_at, clipboard_items.updated_at, \
      clipboard_apps.name AS source_app_name, \
      clipboard_apps.icon_file AS source_app_icon_file \
@@ -127,8 +127,8 @@ pub async fn insert_item(pool: &SqlitePool, item: &ClipboardItem) -> Result<()> 
         "INSERT INTO clipboard_items \
          (id, kind, sub_kind, group_id, source_app_id, content, content_hash, search_text, \
           summary, file_types, size, width, height, use_count, is_favorite, is_pinned, is_sensitive, platform, \
-          sync_source_device_id, note, created_at, updated_at) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+          note, created_at, updated_at) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(item.id.as_str())
     .bind(item.kind)
@@ -148,7 +148,6 @@ pub async fn insert_item(pool: &SqlitePool, item: &ClipboardItem) -> Result<()> 
     .bind(item.is_pinned)
     .bind(item.is_sensitive)
     .bind(item.platform)
-    .bind(item.sync_source_device_id.as_deref())
     .bind(item.note.as_deref())
     .bind(item.created_at)
     .bind(item.updated_at)

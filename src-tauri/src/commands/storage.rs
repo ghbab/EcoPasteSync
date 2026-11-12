@@ -227,6 +227,18 @@ async fn switch_storage_location(
         return Err(anyhow::anyhow!(message).into());
     }
 
+    // 数据目录已切换：同步库跟着新目录重建，避免继续使用旧目录里即将被删除的文件。
+    match crate::db::sync_db::init(&app).await {
+        Ok(sync_pool) => {
+            app.state::<crate::db::SyncDatabaseState>()
+                .replace(sync_pool)
+                .await;
+        }
+        Err(err) => {
+            log::warn!("reopen sync database after storage switch failed: {err}");
+        }
+    }
+
     let settings = rebase_storage_states(&app).await?;
     remove_old_storage_data(&app, &current)?;
     emit_settings_updated(&app, &settings);

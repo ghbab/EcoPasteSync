@@ -376,17 +376,17 @@ impl RawDeviceRow {
     }
 }
 
-/// 从 `AppHandle` 取连接池（同步命令 / 事件处理统一入口）。
+/// 同步库连接池：设备、黑名单等 fork 专属数据不写入上游共享的主剪辑库。
 pub async fn pool(app: &AppHandle) -> sqlx::SqlitePool {
     use tauri::Manager;
 
-    app.state::<crate::db::DatabaseState>().pool().await
+    app.state::<crate::db::SyncDatabaseState>().pool().await
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::test_support::memory_pool;
+    use crate::db::test_support::sync_memory_pool;
 
     fn sample_record(device_id: &str) -> SyncDeviceRecord {
         let now = Utc::now();
@@ -406,7 +406,7 @@ mod tests {
 
     #[tokio::test]
     async fn upsert_find_rename_remove_roundtrip() {
-        let pool = memory_pool().await;
+        let pool = sync_memory_pool().await;
         let record = sample_record("dev-1");
         upsert_device(&pool, &record).await.unwrap();
 
@@ -428,7 +428,7 @@ mod tests {
 
     #[tokio::test]
     async fn upsert_overwrites_existing_row() {
-        let pool = memory_pool().await;
+        let pool = sync_memory_pool().await;
         upsert_device(&pool, &sample_record("dev-1")).await.unwrap();
 
         let mut updated = sample_record("dev-1");
@@ -444,14 +444,14 @@ mod tests {
 
     #[tokio::test]
     async fn rename_rejects_empty_name() {
-        let pool = memory_pool().await;
+        let pool = sync_memory_pool().await;
         upsert_device(&pool, &sample_record("dev-1")).await.unwrap();
         assert!(rename_device(&pool, "dev-1", "   ").await.is_err());
     }
 
     #[tokio::test]
     async fn permissions_update_partial_fields() {
-        let pool = memory_pool().await;
+        let pool = sync_memory_pool().await;
         upsert_device(&pool, &sample_record("dev-1")).await.unwrap();
 
         set_device_permissions(&pool, "dev-1", Some(false), None)
@@ -471,7 +471,7 @@ mod tests {
 
     #[tokio::test]
     async fn touch_and_pull_cursor_update() {
-        let pool = memory_pool().await;
+        let pool = sync_memory_pool().await;
         upsert_device(&pool, &sample_record("dev-1")).await.unwrap();
 
         touch_device(&pool, "dev-1", "10.0.0.5:40000")
@@ -489,7 +489,7 @@ mod tests {
 
     #[tokio::test]
     async fn blacklist_roundtrip_and_unpair() {
-        let pool = memory_pool().await;
+        let pool = sync_memory_pool().await;
         upsert_device(&pool, &sample_record("dev-1")).await.unwrap();
         assert!(!is_blacklisted(&pool, "dev-1").await.unwrap());
 

@@ -201,11 +201,29 @@ pub fn run() {
 
             let handle_db = handle.clone();
             tauri::async_runtime::block_on(async move {
-                let pool = db::init(&handle_db).await.map_err(|err| {
+                // 主库只应用上游 migration；fork 的同步表放在独立的 sync.db。
+                // 顺序固定：打开主库 → 初始化同步库 → 拆分旧版遗留数据 → 主库 migration。
+                let pool = db::init::open(&handle_db).await.map_err(|err| {
                     log::error!("database initialization failed: {err:?}");
                     err
                 })?;
+                let sync_pool = db::sync_db::init(&handle_db).await.map_err(|err| {
+                    log::error!("sync database initialization failed: {err:?}");
+                    err
+                })?;
+                db::sync_db::migrate_legacy(&pool, &sync_pool)
+                    .await
+                    .map_err(|err| {
+                        log::error!("legacy sync data migration failed: {err:?}");
+                        err
+                    })?;
+                db::init::migrate(&pool).await.map_err(|err| {
+                    log::error!("database migration failed: {err:?}");
+                    err
+                })?;
+
                 handle_db.manage(db::DatabaseState::new(pool));
+                handle_db.manage(db::SyncDatabaseState::new(sync_pool));
                 clipboard::init(&handle_db)?;
 
                 // 数据库就绪后初始化局域网同步（按设置决定是否启动服务）。

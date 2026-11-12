@@ -64,8 +64,8 @@ pub struct ClipboardItem {
     pub platform: Platform,
     /// 同步入库时的来源设备 id；本机复制产生的条目为 `None`。
     ///
-    /// 仅用于文件拉取授权：只允许对端读取本机产生的 files 条目路径，避免
-    /// 已配对设备先推送伪造路径、再借拉取接口读取本机任意文件。不下发前端。
+    /// 该值不落主库：来源设备存放在独立同步库的 `sync_item_meta`，运行时按需拼装。
+    /// 文件拉取授权改为显式查询同步库，不能依赖本字段（列表裁剪路径可能不填充它）。
     #[sqlx(default)]
     #[serde(skip)]
     pub sync_source_device_id: Option<String>,

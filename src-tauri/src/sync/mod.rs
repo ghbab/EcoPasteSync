@@ -21,6 +21,7 @@ pub(crate) mod devices;
 mod discovery;
 mod file_state;
 mod file_transfer;
+pub(crate) mod item_meta;
 mod protocol;
 mod secrets;
 mod server;
@@ -917,7 +918,10 @@ pub async fn ensure_files_local(
     if item.kind != ClipboardKind::Files {
         return Ok(None);
     }
-    if item.sync_source_device_id.is_none() {
+
+    // 来源设备记录在独立同步库；本机复制的条目没有记录，直接使用原始路径。
+    let sync_pool = devices::pool(app).await;
+    if item_meta::source_of(&sync_pool, &item.id).await?.is_none() {
         return Ok(None);
     }
 
@@ -966,7 +970,7 @@ pub async fn maybe_broadcast_item(app: &AppHandle, item: &ClipboardItem) {
         return;
     }
 
-    let pool = app.state::<crate::db::DatabaseState>().pool().await;
+    let pool = devices::pool(app).await;
     let targets = match devices::list_devices(&pool).await {
         Ok(list) => list,
         Err(err) => {
@@ -1262,7 +1266,7 @@ pub async fn ingest_remote_item(
 
     // 图片：按发送方文件名回源拉取原图字节并落盘。两端字节一致 → 文件名一致 → 天然去重。
     if kind == ClipboardKind::Image {
-        let pool = app.state::<crate::db::DatabaseState>().pool().await;
+        let pool = devices::pool(app).await;
         let Ok(Some(device)) = devices::find_device(&pool, source_device_id).await else {
             log::warn!("sync ingest: source device {source_device_id} not paired");
             return;
@@ -1346,7 +1350,8 @@ pub async fn ingest_remote_item(
         is_pinned: false,
         is_sensitive: dto.is_sensitive,
         platform: parse_platform_tag(&dto.platform),
-        sync_source_device_id: Some(source_device_id.to_owned()),
+        // 来源设备记录在独立同步库（sync_item_meta），不写入共享主库。
+        sync_source_device_id: None,
         note: None,
         created_at,
         updated_at: created_at,
@@ -1361,27 +1366,44 @@ pub async fn ingest_remote_item(
         display_created_at: String::new(),
     };
 
+    // 来源标记先写同步库：反过来先入库再标记，一旦标记失败，远端 files 条目
+    // 会被当成可共享的本机条目，路径授权检查随之失效。
+    let sync_pool = devices::pool(app).await;
+    if let Err(err) = item_meta::set_source(&sync_pool, &item.id, source_device_id).await {
+        log::warn!("sync ingest: record item source failed: {err}");
+        return;
+    }
+
     let pool = app.state::<crate::db::DatabaseState>().pool().await;
     match upsert_item(&pool, &item).await {
         Ok(result) => {
+            if result.deduplicated {
+                // 命中本机已有条目时保留本机语义；刚写的来源标记是孤儿记录，直接清掉。
+                if let Err(err) = item_meta::remove_for_item(&sync_pool, &item.id).await {
+                    log::warn!("sync ingest: drop orphan item source failed: {err}");
+                }
+            }
+
             if let Some((state, total_bytes, file_count)) = deferred_files {
-                // 保存发送端文件指纹：粘贴时没有它就无法按块拉取。
-                let files_json = dto
-                    .files
-                    .as_deref()
-                    .and_then(|files| serde_json::to_string(files).ok());
-                if let Err(err) = file_state::upsert(
-                    &pool,
-                    &result.id,
-                    source_device_id,
-                    state,
-                    total_bytes,
-                    file_count,
-                    files_json.as_deref(),
-                )
-                .await
-                {
-                    log::warn!("sync ingest: upsert file state failed: {err}");
+                if !result.deduplicated {
+                    // 保存发送端文件指纹：粘贴时没有它就无法按块拉取。
+                    let files_json = dto
+                        .files
+                        .as_deref()
+                        .and_then(|files| serde_json::to_string(files).ok());
+                    if let Err(err) = file_state::upsert(
+                        &sync_pool,
+                        &result.id,
+                        source_device_id,
+                        state,
+                        total_bytes,
+                        file_count,
+                        files_json.as_deref(),
+                    )
+                    .await
+                    {
+                        log::warn!("sync ingest: upsert file state failed: {err}");
+                    }
                 }
             }
 
@@ -1411,7 +1433,7 @@ pub async fn pull_from_device(app: &AppHandle, device_id: &str) {
         return;
     }
 
-    let pool = app.state::<crate::db::DatabaseState>().pool().await;
+    let pool = devices::pool(app).await;
     let Some(device) = (match devices::find_device(&pool, device_id).await {
         Ok(device) => device,
         Err(err) => {
@@ -1475,7 +1497,7 @@ pub fn emit_pair_sas(app: &AppHandle, device_id: &str, sas: &str) {
 /// mDNS 只在同一广播域生效；跨网段手动配对的设备靠这一步维持在线显示，
 /// 探测成功的地址也会写回 `last_address`，供后续推送与拉取使用。
 async fn probe_paired_devices(app: &AppHandle, manager: &Arc<SyncManager>) {
-    let pool = app.state::<crate::db::DatabaseState>().pool().await;
+    let pool = devices::pool(app).await;
     let list = match devices::list_devices(&pool).await {
         Ok(list) => list,
         Err(err) => {
@@ -1519,7 +1541,7 @@ pub async fn sync_state_payload(app: &AppHandle) -> SyncStateDto {
         .map(|entry| (entry.device_id.clone(), entry))
         .collect();
 
-    let pool = app.state::<crate::db::DatabaseState>().pool().await;
+    let pool = devices::pool(app).await;
     let paired = devices::list_devices(&pool).await.unwrap_or_default();
     let blocked_ids = devices::list_blacklisted_ids(&pool)
         .await

@@ -8,7 +8,7 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket};
 use std::sync::Arc;
 use std::time::Duration;
 
-use tauri::{AppHandle, Manager};
+use tauri::AppHandle;
 
 use crate::core::{AppError, Result};
 use crate::sync::protocol;
@@ -99,7 +99,7 @@ pub fn spawn_discovery(
 
                         let fullname = info.get_fullname().to_owned();
                         let paired_device = {
-                            let pool = app.state::<crate::db::DatabaseState>().pool().await;
+                            let pool = crate::sync::devices::pool(&app).await;
                             crate::sync::devices::find_device(&pool, &entry.device_id)
                                 .await
                                 .ok()
@@ -134,7 +134,7 @@ pub fn spawn_discovery(
 
                         // 已配对设备上线：更新在线信息并触发增量拉取。
                         if paired_device.is_some() {
-                            let pool = app.state::<crate::db::DatabaseState>().pool().await;
+                            let pool = crate::sync::devices::pool(&app).await;
                             let _ = crate::sync::devices::touch_device(
                                 &pool,
                                 &entry.device_id,

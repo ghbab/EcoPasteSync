@@ -93,7 +93,7 @@ pub async fn respond_sync_pair(
 /// 解除配对：删除已配对设备（对端下次推送将被拒）。
 #[tauri::command]
 pub async fn remove_sync_device(app: AppHandle, device_id: String) -> Result<()> {
-    let pool = app.state::<crate::db::DatabaseState>().pool().await;
+    let pool = devices::pool(&app).await;
     if !devices::remove_device(&pool, &device_id).await? {
         return Err(AppError::Other(anyhow::anyhow!("device not found")));
     }
@@ -105,12 +105,7 @@ pub async fn remove_sync_device(app: AppHandle, device_id: String) -> Result<()>
 /// 修改设备备注名。
 #[tauri::command]
 pub async fn rename_sync_device(app: AppHandle, device_id: String, name: String) -> Result<()> {
-    devices::rename_device(
-        &app.state::<crate::db::DatabaseState>().pool().await,
-        &device_id,
-        &name,
-    )
-    .await?;
+    devices::rename_device(&devices::pool(&app).await, &device_id, &name).await?;
     crate::sync::emit_devices_updated(&app);
     Ok(())
 }
@@ -128,7 +123,7 @@ pub async fn set_sync_device_permissions(
     }
 
     devices::set_device_permissions(
-        &app.state::<crate::db::DatabaseState>().pool().await,
+        &devices::pool(&app).await,
         &device_id,
         allow_send,
         allow_receive,
@@ -145,12 +140,7 @@ pub async fn set_sync_device_blocked(
     device_id: String,
     blocked: bool,
 ) -> Result<()> {
-    devices::set_blacklisted(
-        &app.state::<crate::db::DatabaseState>().pool().await,
-        &device_id,
-        blocked,
-    )
-    .await?;
+    devices::set_blacklisted(&devices::pool(&app).await, &device_id, blocked).await?;
     crate::sync::emit_devices_updated(&app);
     Ok(())
 }
@@ -166,7 +156,7 @@ pub async fn refresh_sync_devices(app: AppHandle) -> Result<()> {
     manager.clear_nearby();
 
     // 对已配对且最近有地址的设备立即补拉（绕过节流的一次性操作）。
-    let pool = app.state::<crate::db::DatabaseState>().pool().await;
+    let pool = devices::pool(&app).await;
     for device in devices::list_devices(&pool).await? {
         if manager
             .device_address(&device.device_id, device.last_address.as_deref())

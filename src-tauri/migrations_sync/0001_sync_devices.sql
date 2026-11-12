@@ -1,5 +1,6 @@
 -- 局域网同步：已配对（互信）设备与黑名单。
 -- shared_key 为配对时双方各自派生的一致密钥（hex），用于请求认证与报文加密。
+-- 本库与主剪辑库分离，保证上游 EcoPaste 打开 clipboard.db 时 migration 列表仍然完整。
 
 CREATE TABLE sync_devices (
     device_id      TEXT PRIMARY KEY,

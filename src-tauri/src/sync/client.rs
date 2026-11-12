@@ -538,7 +538,7 @@ pub async fn pull_items(app: &AppHandle, device: &SyncDeviceRecord, address: &st
 
     // 只有成功拿到响应才推进游标（失败下次重试）。
     if let Some(pulled_until) = max_created {
-        let pool = app.state::<crate::db::DatabaseState>().pool().await;
+        let pool = devices::pool(app).await;
         crate::sync::devices::set_last_pull_at(&pool, &device.device_id, pulled_until).await?;
     }
     Ok(())

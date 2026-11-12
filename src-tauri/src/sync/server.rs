@@ -150,7 +150,7 @@ async fn verify_auth(
         .ok_or(StatusCode::UNAUTHORIZED)?
         .to_owned();
 
-    let pool = ctx.app.state::<crate::db::DatabaseState>().pool().await;
+    let pool = devices::pool(&ctx.app).await;
     let Some(device) = devices::find_device(&pool, &device_id)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
@@ -256,7 +256,7 @@ async fn handle_pair(
         return StatusCode::BAD_REQUEST.into_response();
     }
 
-    let pool = ctx.app.state::<crate::db::DatabaseState>().pool().await;
+    let pool = devices::pool(&ctx.app).await;
     match devices::is_blacklisted(&pool, &request.device_id).await {
         Ok(true) => return StatusCode::FORBIDDEN.into_response(),
         Ok(false) => {}
@@ -376,12 +376,22 @@ async fn handle_pull(
         .collect();
 
     // 响应 pull 也等于对外共享：登记本机产生的文件路径，允许对端随后按需拉取。
-    // 同步入库的条目带来源设备标记，不能当作本机可读路径登记，否则已配对设备
-    // 可以先推送伪造路径、再借拉取接口读取本机任意文件。
+    // 来源设备记录在独立同步库，先批量取回；带来源记录的条目是远端条目，
+    // 不能登记路径，否则已配对设备可以先推送伪造路径、再借拉取接口读取本机任意文件。
+    let sync_pool = devices::pool(&ctx.app).await;
+    let file_item_ids: Vec<String> = items
+        .iter()
+        .filter(|item| item.kind == crate::db::models::ClipboardKind::Files)
+        .map(|item| item.id.clone())
+        .collect();
+    let remote_sources = crate::sync::item_meta::sources_for(&sync_pool, &file_item_ids)
+        .await
+        .unwrap_or_default();
+
     let mut shared_paths = Vec::new();
     for item in &items {
         if item.kind == crate::db::models::ClipboardKind::Files
-            && item.sync_source_device_id.is_none()
+            && !remote_sources.contains_key(&item.id)
         {
             shared_paths.extend(collect_shared_paths(&item.content));
         }

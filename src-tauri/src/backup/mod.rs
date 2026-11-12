@@ -1000,7 +1000,18 @@ async fn overwrite_import(
         let db_src = db_src.clone();
         async move {
             replace_live_database(&app, &db_src)?;
-            crate::db::init(&app).await
+
+            // 备份库可能来自旧版 fork（主库里带 fork 表与 migration 记录）：
+            // 先拆分到同步库，再按上游版本应用主库 migration。
+            let pool = crate::db::init::open(&app).await?;
+            let sync_pool = app.state::<crate::db::SyncDatabaseState>().pool().await;
+            crate::db::sync_db::migrate_legacy(&pool, &sync_pool).await?;
+            crate::db::init::migrate(&pool).await?;
+
+            // 主库已被整体替换，旧条目的来源标记全部失效，清空避免误判。
+            crate::sync::item_meta::clear(&sync_pool).await?;
+
+            Ok(pool)
         }
     })
     .await?;
