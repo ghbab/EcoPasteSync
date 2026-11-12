@@ -43,24 +43,40 @@ pub fn spawn_discovery(
 
     let ip = local_lan_ip().to_string();
     // mdns-sd 0.13 的构造函数签名：(服务类型, 实例名, 主机名, IP, 端口, TXT 属性)，返回 Result。
-    let service = mdns_sd::ServiceInfo::new(
+    let service = match mdns_sd::ServiceInfo::new(
         protocol::SERVICE_TYPE,
         &instance,
         &host_name,
         ip.as_str(),
         port,
         properties,
-    )
-    .map_err(|err| AppError::Other(anyhow::anyhow!("build mDNS service info failed: {err}")))?
-    .enable_addr_auto();
+    ) {
+        Ok(service) => service.enable_addr_auto(),
+        Err(err) => {
+            let _ = daemon.shutdown();
+            return Err(AppError::Other(anyhow::anyhow!(
+                "build mDNS service info failed: {err}"
+            )));
+        }
+    };
 
-    daemon
-        .register(service)
-        .map_err(|err| AppError::Other(anyhow::anyhow!("register mDNS service failed: {err}")))?;
+    if let Err(err) = daemon.register(service) {
+        // 启动失败时立即关停，避免留下无消费者的后台线程。
+        let _ = daemon.shutdown();
+        return Err(AppError::Other(anyhow::anyhow!(
+            "register mDNS service failed: {err}"
+        )));
+    }
 
-    let receiver = daemon
-        .browse(protocol::SERVICE_TYPE)
-        .map_err(|err| AppError::Other(anyhow::anyhow!("browse mDNS services failed: {err}")))?;
+    let receiver = match daemon.browse(protocol::SERVICE_TYPE) {
+        Ok(receiver) => receiver,
+        Err(err) => {
+            let _ = daemon.shutdown();
+            return Err(AppError::Other(anyhow::anyhow!(
+                "browse mDNS services failed: {err}"
+            )));
+        }
+    };
 
     manager.set_daemon(daemon);
 

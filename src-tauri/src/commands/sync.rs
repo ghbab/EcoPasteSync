@@ -29,9 +29,9 @@ pub async fn request_sync_pair(
         return Err(AppError::Other(anyhow::anyhow!("device id is empty")));
     }
 
-    // 未开启同步时附近列表为空，提前拦截。
-    if !manager.is_running() {
-        return Err(AppError::Other(anyhow::anyhow!("sync is disabled")));
+    // 以用户设置为准：服务是否已启动不影响发起配对，避免运行态偏差直接阻断操作。
+    if !sync_enabled(&app) {
+        return Err(sync_disabled_error(&app));
     }
 
     client::start_pairing(app, manager.inner().clone(), device_id);
@@ -49,9 +49,9 @@ pub async fn request_sync_pair_by_address(
         return Err(AppError::Other(anyhow::anyhow!("address is empty")));
     }
 
-    // 未开启同步时服务器不会启动，先拦截避免误导用户。
-    if !manager.is_running() {
-        return Err(AppError::Other(anyhow::anyhow!("sync is disabled")));
+    // 手动配对是主动外连，不依赖本机服务运行态；只要用户已开启同步就允许发起。
+    if !sync_enabled(&app) {
+        return Err(sync_disabled_error(&app));
     }
 
     // 默认端口取本机设置：两端通常使用同一个默认端口，手动输入只需 IP。
@@ -171,4 +171,22 @@ pub async fn refresh_sync_devices(app: AppHandle) -> Result<()> {
 
     crate::sync::emit_devices_updated(&app);
     Ok(())
+}
+
+/// 读取当前设置里的同步开关（用户意图，不反映服务运行态）。
+fn sync_enabled(app: &AppHandle) -> bool {
+    app.state::<crate::settings::SettingsStore>()
+        .snapshot()
+        .sync
+        .enabled
+}
+
+/// 构造「同步未开启」错误，根因文案跟随当前界面语言。
+fn sync_disabled_error(app: &AppHandle) -> AppError {
+    let lang = crate::i18n::current_language(app);
+
+    AppError::Other(anyhow::anyhow!(crate::i18n::commands::label(
+        lang,
+        crate::i18n::commands::Key::SyncDisabled
+    )))
 }

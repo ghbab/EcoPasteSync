@@ -241,7 +241,13 @@ impl SyncManager {
         *self.shutdown_tx.lock().expect("sync poisoned") = Some(shutdown);
 
         let manager = app.state::<Arc<SyncManager>>().inner().clone();
-        discovery::spawn_discovery(app.clone(), manager, desired.device_name.clone(), port)?;
+        // mDNS 失败（端口被占用、系统限制本地网络权限等）不应阻断同步：
+        // HTTP 服务仍可用于手动配对与已配对设备互推，只是附近列表暂不可用。
+        if let Err(err) =
+            discovery::spawn_discovery(app.clone(), manager, desired.device_name.clone(), port)
+        {
+            log::warn!("sync discovery start failed: {err:?}");
+        }
 
         *self.fingerprint.write().expect("sync poisoned") = Some(desired.clone());
         log::info!("sync started on port {port} as {}", self.device_id);

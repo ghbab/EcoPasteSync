@@ -568,7 +568,7 @@
           "emptyNearby": "暂无附近设备",
           "emptyPaired": "暂无已配对设备",
           "localDeviceName": "本机设备名：{{name}}",
-          "manualPairHint": "跨网段设备可能无法被自动发现，输入对方 IP 地址（可带端口）发起配对。",
+          "manualPairHint": "输入对方IP（默认端口可不填）发起配对。",
           "manualPairPlaceholder": "192.168.1.20:47654",
           "manualPairSubmit": "发起配对",
           "manualPairTitle": "手动配对",
