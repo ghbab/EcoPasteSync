@@ -1465,6 +1465,18 @@ export const requestSyncPair = (deviceId: string) => {
 };
 
 /**
+ * 手动指定地址发起配对：适用于跨网段、自动发现不到的设备。
+ * 返回对端设备信息，配对结果仍经 `sync://pair-result` 事件异步返回。
+ */
+export const requestSyncPairByAddress = (address: string) => {
+  return call<NearbyDevice>(
+    TAURI_COMMAND.REQUEST_SYNC_PAIR_BY_ADDRESS,
+    "commands:labels.requestPairByAddress",
+    { address },
+  );
+};
+
+/**
  * 应答收到的配对请求（接收端确认弹窗的「允许 / 拒绝」）。
  */
 export const respondSyncPair = (deviceId: string, accept: boolean) => {

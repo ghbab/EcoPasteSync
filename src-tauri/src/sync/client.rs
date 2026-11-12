@@ -9,13 +9,13 @@ use tauri::{AppHandle, Manager};
 
 use crate::core::{AppError, Result};
 use crate::sync::crypto;
-use crate::sync::devices::SyncDeviceRecord;
+use crate::sync::devices::{self, SyncDeviceRecord};
 use crate::sync::protocol::{
-    file_chunk_signature_target, DeviceInfoDto, PairRequestDto, PairStatusDto,
+    file_chunk_signature_target, DeviceInfoDto, NearbyDeviceDto, PairRequestDto, PairStatusDto,
     SyncClipboardItemDto, API_CLIPBOARD_PULL, API_CLIPBOARD_PUSH, API_FILE_CHUNK, API_IMAGE,
-    API_PAIR, API_PAIR_STATUS, HEADER_DEVICE_ID, HEADER_SIGNATURE, HEADER_TIMESTAMP,
+    API_INFO, API_PAIR, API_PAIR_STATUS, HEADER_DEVICE_ID, HEADER_SIGNATURE, HEADER_TIMESTAMP,
 };
-use crate::sync::{emit_pair_result, SyncManager};
+use crate::sync::{emit_pair_result, NearbyEntry, SyncManager};
 
 /// 单次 HTTP 请求超时：推送大文本（可达数 MB）需要宽松上限。
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
@@ -36,16 +36,26 @@ fn now_unix() -> i64 {
     chrono::Utc::now().timestamp()
 }
 
-/// 发起配对（A 端）：发送明文请求，成功受理后轮询结果。
+/// 发起配对（A 端）：向附近设备发送明文请求，成功受理后轮询结果。
 /// 结果通过 `sync://pair-result` 事件通知前端；接受时落库。
 pub fn start_pairing(app: AppHandle, manager: std::sync::Arc<SyncManager>, device_id: String) {
-    tauri::async_runtime::spawn(async move {
-        let info = manager.device_info(&app);
-        let Some(address) = manager.device_address(&device_id, None) else {
-            emit_pair_result(&app, &device_id, false, Some("device-offline".to_owned()));
-            return;
-        };
+    let Some(entry) = manager.nearby_entry(&device_id) else {
+        emit_pair_result(&app, &device_id, false, Some("device-offline".to_owned()));
+        return;
+    };
 
+    start_pairing_with_entry(app, manager, entry);
+}
+
+/// 用固定的设备条目发起配对；mDNS 发现与手动指定地址共用这一条路径。
+pub fn start_pairing_with_entry(
+    app: AppHandle,
+    manager: std::sync::Arc<SyncManager>,
+    entry: NearbyEntry,
+) {
+    tauri::async_runtime::spawn(async move {
+        let device_id = entry.device_id.clone();
+        let info = manager.device_info(&app);
         let seed = crypto::generate_pairing_seed();
         let request = PairRequestDto {
             device_id: info.device_id,
@@ -63,7 +73,7 @@ pub fn start_pairing(app: AppHandle, manager: std::sync::Arc<SyncManager>, devic
             }
         };
 
-        let url = format!("http://{address}{API_PAIR}");
+        let url = format!("http://{}{API_PAIR}", entry.address);
         let sent = client
             .post(&url)
             .json(&request)
@@ -74,7 +84,7 @@ pub fn start_pairing(app: AppHandle, manager: std::sync::Arc<SyncManager>, devic
         match sent {
             Ok(resp) if resp.status().as_u16() == 202 => {
                 // 受理成功，进入轮询。
-                poll_pair_result(app, manager, client, &address, &device_id, &seed).await;
+                poll_pair_result(app, manager, client, entry, &seed).await;
             }
             Ok(resp) => {
                 log::warn!("sync pair: unexpected status {} from {url}", resp.status());
@@ -88,24 +98,149 @@ pub fn start_pairing(app: AppHandle, manager: std::sync::Arc<SyncManager>, devic
     });
 }
 
+/// 手动指定地址发起配对：先读取对端设备信息，再走与 mDNS 相同的配对流程。
+///
+/// 适用于跨网段、mDNS 发现不到的设备；对端仍需在配对请求弹窗中确认。
+pub async fn start_pairing_with_address(
+    app: AppHandle,
+    manager: std::sync::Arc<SyncManager>,
+    raw_address: &str,
+    default_port: u16,
+) -> Result<NearbyDeviceDto> {
+    let address = normalize_manual_address(raw_address, default_port)?;
+    let info = fetch_device_info(&address).await?;
+
+    if info.device_id == manager.device_id() {
+        return Err(AppError::Other(anyhow::anyhow!(
+            "cannot pair with the local device"
+        )));
+    }
+
+    let pool = devices::pool(&app).await;
+    if devices::find_device(&pool, &info.device_id)
+        .await?
+        .is_some()
+    {
+        return Err(AppError::Other(anyhow::anyhow!("device is already paired")));
+    }
+    if devices::is_blacklisted(&pool, &info.device_id).await? {
+        return Err(AppError::Other(anyhow::anyhow!("device is blocked")));
+    }
+
+    let entry = NearbyEntry {
+        device_id: info.device_id.clone(),
+        name: info.name.clone(),
+        platform: info.platform.clone(),
+        address: address.clone(),
+    };
+    let dto = NearbyDeviceDto {
+        device_id: info.device_id,
+        name: info.name,
+        platform: info.platform,
+        address,
+    };
+
+    start_pairing_with_entry(app, manager, entry);
+    Ok(dto)
+}
+
+/// 规范化手动输入的设备地址，返回 `host:port`。
+///
+/// 接受 `192.168.1.20`、`192.168.1.20:47654`、`http://host[:port]` 与
+/// `[ipv6]:port`；未写端口时使用本机同步端口（两端默认配置一致）。
+pub fn normalize_manual_address(raw: &str, default_port: u16) -> Result<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err(AppError::Other(anyhow::anyhow!("address is empty")));
+    }
+
+    let without_scheme = trimmed
+        .strip_prefix("http://")
+        .or_else(|| trimmed.strip_prefix("https://"))
+        .unwrap_or(trimmed);
+    let value = without_scheme.trim_end_matches('/');
+
+    if value.is_empty()
+        || value.contains('/')
+        || value.contains('?')
+        || value.contains('#')
+        || value.contains('@')
+        || value.chars().any(char::is_whitespace)
+    {
+        return Err(AppError::Other(anyhow::anyhow!(
+            "address must be an IP address with an optional port"
+        )));
+    }
+
+    // 方括号形式的 IPv6 地址，端口写在括号外。
+    if value.starts_with('[') {
+        let Some(end) = value.find(']') else {
+            return Err(AppError::Other(anyhow::anyhow!(
+                "address must be an IP address with an optional port"
+            )));
+        };
+
+        let host = &value[..=end];
+        let rest = &value[end + 1..];
+        if rest.is_empty() {
+            return Ok(format!("{host}:{default_port}"));
+        }
+
+        let Some(raw_port) = rest.strip_prefix(':') else {
+            return Err(AppError::Other(anyhow::anyhow!(
+                "address must be an IP address with an optional port"
+            )));
+        };
+
+        return Ok(format!("{host}:{}", parse_port(raw_port)?));
+    }
+
+    match value.rsplit_once(':') {
+        Some((host, raw_port)) => {
+            if host.is_empty() || host.contains(':') {
+                return Err(AppError::Other(anyhow::anyhow!(
+                    "IPv6 addresses must use [address]:port"
+                )));
+            }
+
+            Ok(format!("{host}:{}", parse_port(raw_port)?))
+        }
+        None => Ok(format!("{value}:{default_port}")),
+    }
+}
+
+/// 解析端口：非法数字与 0 都拒绝。
+fn parse_port(raw: &str) -> Result<u16> {
+    let port: u16 = raw
+        .parse()
+        .map_err(|_| AppError::Other(anyhow::anyhow!("port is invalid")))?;
+
+    if port == 0 {
+        return Err(AppError::Other(anyhow::anyhow!("port is invalid")));
+    }
+
+    Ok(port)
+}
+
 /// 轮询对端的配对决定；`Accepted` 时保存配对记录并补一次增量拉取。
 async fn poll_pair_result(
     app: AppHandle,
     manager: std::sync::Arc<SyncManager>,
     client: Client,
-    address: &str,
-    device_id: &str,
+    entry: NearbyEntry,
     seed: &str,
 ) {
+    let device_id = entry.device_id.clone();
     let url = format!(
-        "http://{address}{API_PAIR_STATUS}?deviceId={}",
+        "http://{}{API_PAIR_STATUS}?deviceId={}",
+        entry.address,
         manager.device_id()
     );
     let started = std::time::Instant::now();
 
     loop {
         if started.elapsed() >= PAIR_POLL_TIMEOUT {
-            emit_pair_result(&app, device_id, false, Some("timeout".to_owned()));
+            emit_pair_result(&app, &device_id, false, Some("timeout".to_owned()));
             return;
         }
 
@@ -134,18 +269,18 @@ async fn poll_pair_result(
                 continue;
             }
             PairStatusDto::Accepted => {
-                if let Err(err) = manager.save_paired_device(&app, device_id, seed).await {
+                if let Err(err) = manager.save_paired_device(&app, &entry, seed).await {
                     log::warn!("sync pair: save paired device failed: {err}");
-                    emit_pair_result(&app, device_id, false, Some("internal-error".to_owned()));
+                    emit_pair_result(&app, &device_id, false, Some("internal-error".to_owned()));
                     return;
                 }
                 // 新配对设备立即补一次近段历史。
-                crate::sync::pull_from_device(&app, device_id).await;
-                emit_pair_result(&app, device_id, true, None);
+                crate::sync::pull_from_device(&app, &device_id).await;
+                emit_pair_result(&app, &device_id, true, None);
                 return;
             }
             PairStatusDto::Rejected => {
-                emit_pair_result(&app, device_id, false, Some("pair-rejected".to_owned()));
+                emit_pair_result(&app, &device_id, false, Some("pair-rejected".to_owned()));
                 return;
             }
         }
@@ -347,11 +482,10 @@ pub async fn pull_items(app: &AppHandle, device: &SyncDeviceRecord, address: &st
     Ok(())
 }
 
-/// 探测对端设备信息（明文，用于诊断）。
-#[allow(dead_code)]
+/// 读取对端设备信息（明文端点，用于手动地址配对）；失败说明地址不可达或不是 EcoPaste。
 pub async fn fetch_device_info(address: &str) -> Result<DeviceInfoDto> {
     let client = client()?;
-    let url = format!("http://{address}/api/info");
+    let url = format!("http://{address}{API_INFO}");
     let resp = client
         .get(&url)
         .timeout(Duration::from_secs(5))
@@ -359,7 +493,52 @@ pub async fn fetch_device_info(address: &str) -> Result<DeviceInfoDto> {
         .await
         .map_err(|err| AppError::Other(anyhow::anyhow!("get {url} failed: {err}")))?;
 
+    if !resp.status().is_success() {
+        return Err(AppError::Other(anyhow::anyhow!(
+            "get {url} returned {}",
+            resp.status()
+        )));
+    }
+
     resp.json::<DeviceInfoDto>()
         .await
         .map_err(|err| AppError::Other(anyhow::anyhow!("decode info from {url} failed: {err}")))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalize_manual_address_adds_default_port() {
+        let address = normalize_manual_address(" 192.168.1.20 ", 47654).unwrap();
+
+        assert_eq!(address, "192.168.1.20:47654");
+    }
+
+    #[test]
+    fn normalize_manual_address_keeps_explicit_port_and_strips_scheme() {
+        let address = normalize_manual_address("http://10.0.0.8:5000/", 47654).unwrap();
+
+        assert_eq!(address, "10.0.0.8:5000");
+    }
+
+    #[test]
+    fn normalize_manual_address_keeps_bracketed_ipv6() {
+        let address = normalize_manual_address("[fe80::1]", 47654).unwrap();
+        let with_port = normalize_manual_address("[fe80::1]:6000", 47654).unwrap();
+
+        assert_eq!(address, "[fe80::1]:47654");
+        assert_eq!(with_port, "[fe80::1]:6000");
+    }
+
+    #[test]
+    fn normalize_manual_address_rejects_invalid_input() {
+        assert!(normalize_manual_address("", 47654).is_err());
+        assert!(normalize_manual_address("host:abc", 47654).is_err());
+        assert!(normalize_manual_address("host:0", 47654).is_err());
+        assert!(normalize_manual_address("fe80::1", 47654).is_err());
+        assert!(normalize_manual_address("host/extra", 47654).is_err());
+        assert!(normalize_manual_address("host?x=1", 47654).is_err());
+    }
 }

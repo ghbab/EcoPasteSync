@@ -55,6 +55,7 @@
     "removeSyncDevice": "Remove device",
     "renameSyncDevice": "Rename device",
     "requestPair": "Request pairing",
+    "requestPairByAddress": "Pair by address",
     "resetSettings": "Reset preferences",
     "resetStorageLocation": "Reset data directory",
     "respondPair": "Respond to pairing",

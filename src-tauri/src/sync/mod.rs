@@ -317,6 +317,15 @@ impl SyncManager {
         self.fullname_map.write().expect("sync poisoned").clear();
     }
 
+    /// 取附近设备条目快照；配对发起端用它固定地址与展示信息。
+    pub fn nearby_entry(&self, device_id: &str) -> Option<NearbyEntry> {
+        self.nearby
+            .read()
+            .expect("sync poisoned")
+            .get(device_id)
+            .cloned()
+    }
+
     pub fn nearby_snapshot(&self) -> Vec<NearbyDeviceDto> {
         self.nearby
             .read()
@@ -463,24 +472,16 @@ impl SyncManager {
     }
 
     /// A 端保存配对结果（轮询到 Accepted 后调用）。
+    ///
+    /// 传入发起时固定的附近条目：轮询期间附近缓存可能被刷新清空，
+    /// 但配对结果仍应按发起时的地址与设备信息入库。
     pub async fn save_paired_device(
         &self,
         app: &AppHandle,
-        device_id: &str,
+        entry: &NearbyEntry,
         seed: &str,
     ) -> Result<()> {
-        let Some(entry) = self
-            .nearby
-            .read()
-            .expect("sync poisoned")
-            .get(device_id)
-            .cloned()
-        else {
-            return Err(AppError::Other(anyhow::anyhow!(
-                "device is no longer nearby"
-            )));
-        };
-
+        let device_id = entry.device_id.as_str();
         let seed_bytes = crypto::seed_from_hex(seed)?;
         let key = crypto::derive_shared_key(&seed_bytes, &self.device_id, device_id);
         let now = chrono::Utc::now();

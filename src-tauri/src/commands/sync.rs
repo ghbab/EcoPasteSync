@@ -38,6 +38,32 @@ pub async fn request_sync_pair(
     Ok(())
 }
 
+/// 手动指定地址发起配对：输入 IP（可带端口），成功受理后等待对端确认。
+#[tauri::command]
+pub async fn request_sync_pair_by_address(
+    app: AppHandle,
+    manager: State<'_, Arc<SyncManager>>,
+    address: String,
+) -> Result<crate::sync::NearbyDeviceDto> {
+    if address.trim().is_empty() {
+        return Err(AppError::Other(anyhow::anyhow!("address is empty")));
+    }
+
+    // 未开启同步时服务器不会启动，先拦截避免误导用户。
+    if !manager.is_running() {
+        return Err(AppError::Other(anyhow::anyhow!("sync is disabled")));
+    }
+
+    // 默认端口取本机设置：两端通常使用同一个默认端口，手动输入只需 IP。
+    let default_port = app
+        .state::<crate::settings::SettingsStore>()
+        .snapshot()
+        .sync
+        .port;
+
+    client::start_pairing_with_address(app, manager.inner().clone(), &address, default_port).await
+}
+
 /// 应答收到的配对请求（接收端用户在确认弹窗点「允许 / 拒绝」）。
 #[tauri::command]
 pub async fn respond_sync_pair(

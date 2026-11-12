@@ -54,6 +54,7 @@ export const TAURI_COMMAND = {
   REMOVE_SYNC_DEVICE: "remove_sync_device",
   RENAME_SYNC_DEVICE: "rename_sync_device",
   REQUEST_SYNC_PAIR: "request_sync_pair",
+  REQUEST_SYNC_PAIR_BY_ADDRESS: "request_sync_pair_by_address",
   RESET_SETTINGS: "reset_settings",
   RESET_STORAGE_LOCATION: "reset_storage_location",
   RESPOND_SYNC_PAIR: "respond_sync_pair",

@@ -1,6 +1,16 @@
 import { useMount } from "ahooks";
-import { Button, Empty, Popconfirm, Spin, Switch, Tag, Typography } from "antd";
-import type { FC, ReactNode } from "react";
+import {
+  Button,
+  Empty,
+  Input,
+  Modal,
+  Popconfirm,
+  Spin,
+  Switch,
+  Tag,
+  Typography,
+} from "antd";
+import type { ChangeEvent, FC, ReactNode } from "react";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
@@ -12,6 +22,7 @@ import {
   removeSyncDevice,
   renameSyncDevice,
   requestSyncPair,
+  requestSyncPairByAddress,
   type SyncPairResultPayload,
   type SyncState,
   setSyncDeviceBlocked,
@@ -33,6 +44,12 @@ const SyncDevicesControl: FC = () => {
   const [syncState, setSyncState] = useState<SyncState | null>(null);
   const [pairingDeviceId, setPairingDeviceId] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [manualPairOpen, setManualPairOpen] = useState(false);
+  const [manualAddress, setManualAddress] = useState("");
+  const [manualSubmitting, setManualSubmitting] = useState(false);
+  const [manualPairingDeviceId, setManualPairingDeviceId] = useState<
+    string | null
+  >(null);
 
   useMount(async () => {
     try {
@@ -53,6 +70,35 @@ const SyncDevicesControl: FC = () => {
     TAURI_EVENT.SYNC_PAIR_RESULT,
     (event) => {
       const { accepted, deviceId, reason } = event.payload;
+
+      // 手动配对等待态：命令返回前就收到结果时按提交中的手动配对归属。
+      const manualMatched =
+        (manualPairingDeviceId !== null &&
+          deviceId === manualPairingDeviceId) ||
+        (manualPairingDeviceId === null && manualSubmitting);
+
+      if (manualMatched) {
+        setManualPairingDeviceId(null);
+        setManualSubmitting(false);
+
+        if (accepted) {
+          setManualPairOpen(false);
+          setManualAddress("");
+          getMessageApi().success(
+            t("schema.settings.sync.devices.pairSuccess"),
+          );
+
+          return;
+        }
+
+        getMessageApi().error(
+          t(
+            `schema.settings.sync.devices.pairFailed.${resolvePairFailureKey(reason)}`,
+          ),
+        );
+
+        return;
+      }
 
       if (deviceId !== pairingDeviceId) return;
 
@@ -93,6 +139,45 @@ const SyncDevicesControl: FC = () => {
       // 发起失败直接结束 loading；成功时等待 pair-result 事件。
       setPairingDeviceId(null);
     }
+  };
+
+  const handleManualPairOpen = () => {
+    setManualAddress("");
+    setManualSubmitting(false);
+    setManualPairingDeviceId(null);
+    setManualPairOpen(true);
+  };
+
+  const handleManualAddressChange = (event: ChangeEvent<HTMLInputElement>) => {
+    setManualAddress(event.target.value);
+  };
+
+  // 提交手动地址：先读取对端信息，受理后进入等待，结果仍由 pair-result 事件送达。
+  const handleManualPairSubmit = async () => {
+    const address = manualAddress.trim();
+
+    if (!address || manualSubmitting) {
+      return;
+    }
+
+    setManualSubmitting(true);
+
+    try {
+      const device = await requestSyncPairByAddress(address);
+
+      setManualPairingDeviceId(device.deviceId);
+    } catch {
+      // 命令层已统一 toast；保留弹窗与输入，方便修正地址后重试。
+      setManualSubmitting(false);
+    }
+  };
+
+  // 取消等待：停止跟踪本次配对，后台结果不再影响界面。
+  const handleManualPairCancel = () => {
+    setManualPairOpen(false);
+    setManualAddress("");
+    setManualSubmitting(false);
+    setManualPairingDeviceId(null);
   };
 
   const handleRename = async (deviceId: string, name: string) => {
@@ -183,16 +268,29 @@ const SyncDevicesControl: FC = () => {
           })}
         </span>
 
-        <Tooltip title={t("schema.settings.sync.devices.refresh")}>
-          <CustomIconButton
-            aria-label={t("schema.settings.sync.devices.refresh")}
-            icon={<i aria-hidden="true" className="i-lucide:refresh-cw" />}
-            loading={refreshing}
-            onClick={handleRefresh}
-            size="small"
-            type="text"
-          />
-        </Tooltip>
+        <span className="flex shrink-0 items-center gap-1">
+          <Tooltip title={t("schema.settings.sync.devices.manualPairTitle")}>
+            <CustomIconButton
+              aria-label={t("schema.settings.sync.devices.manualPairTitle")}
+              disabled={pairingDeviceId !== null || manualSubmitting}
+              icon={<i aria-hidden="true" className="i-lucide:link" />}
+              onClick={handleManualPairOpen}
+              size="small"
+              type="text"
+            />
+          </Tooltip>
+
+          <Tooltip title={t("schema.settings.sync.devices.refresh")}>
+            <CustomIconButton
+              aria-label={t("schema.settings.sync.devices.refresh")}
+              icon={<i aria-hidden="true" className="i-lucide:refresh-cw" />}
+              loading={refreshing}
+              onClick={handleRefresh}
+              size="small"
+              type="text"
+            />
+          </Tooltip>
+        </span>
       </div>
 
       <DeviceGroup title={t("schema.settings.sync.devices.nearbyTitle")}>
@@ -203,7 +301,7 @@ const SyncDevicesControl: FC = () => {
             return (
               <NearbyDeviceRow
                 device={device}
-                disabled={pairingDeviceId !== null}
+                disabled={pairingDeviceId !== null || manualSubmitting}
                 key={device.deviceId}
                 loading={pairingDeviceId === device.deviceId}
                 onPair={handlePair}
@@ -247,6 +345,38 @@ const SyncDevicesControl: FC = () => {
           })
         )}
       </DeviceGroup>
+
+      <Modal
+        cancelButtonProps={{ disabled: manualSubmitting }}
+        cancelText={t("common:actions.cancel")}
+        okButtonProps={{ loading: manualSubmitting }}
+        okText={
+          manualSubmitting
+            ? t("schema.settings.sync.devices.manualPairWaiting")
+            : t("schema.settings.sync.devices.manualPairSubmit")
+        }
+        onCancel={handleManualPairCancel}
+        onOk={handleManualPairSubmit}
+        open={manualPairOpen}
+        title={t("schema.settings.sync.devices.manualPairTitle")}
+      >
+        <div className="flex flex-col gap-2 pt-1">
+          <span className="text-ant-secondary text-xs">
+            {t("schema.settings.sync.devices.manualPairHint")}
+          </span>
+
+          <Input
+            allowClear
+            disabled={manualSubmitting}
+            onChange={handleManualAddressChange}
+            onPressEnter={handleManualPairSubmit}
+            placeholder={t(
+              "schema.settings.sync.devices.manualPairPlaceholder",
+            )}
+            value={manualAddress}
+          />
+        </div>
+      </Modal>
     </div>
   );
 };

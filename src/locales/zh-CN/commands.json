@@ -55,6 +55,7 @@
     "removeSyncDevice": "解除配对",
     "renameSyncDevice": "重命名设备",
     "requestPair": "发起配对",
+    "requestPairByAddress": "手动配对",
     "resetSettings": "重置偏好",
     "resetStorageLocation": "还原数据目录",
     "respondPair": "响应配对",
