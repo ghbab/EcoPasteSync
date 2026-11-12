@@ -6,13 +6,13 @@
   "description": "A local-first clipboard manager for macOS and Windows.",
   "author": "ayangweb",
   "license": "Apache-2.0",
-  "homepage": "https://github.com/ghbab/EcoPasterSync#readme",
+  "homepage": "https://github.com/ghbab/EcoPasteSync#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/ghbab/EcoPasterSync.git"
+    "url": "git+https://github.com/ghbab/EcoPasteSync.git"
   },
   "bugs": {
-    "url": "https://github.com/ghbab/EcoPasterSync/issues"
+    "url": "https://github.com/ghbab/EcoPasteSync/issues"
   },
   "type": "module",
   "packageManager": "pnpm@10.33.1",

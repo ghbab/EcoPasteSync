@@ -25,7 +25,7 @@ use crate::window::CLIPBOARD_WINDOW_LABEL;
 use crate::window::{self, PREFERENCE_WINDOW_LABEL};
 
 const TRAY_ID: &str = "app-tray";
-const GITHUB_URL: &str = "https://github.com/ghbab/EcoPasterSync";
+const GITHUB_URL: &str = "https://github.com/ghbab/EcoPasteSync";
 
 const MENU_PREFERENCE: &str = "tray::preference";
 const MENU_TOGGLE_LISTEN: &str = "tray::toggle_listen";
