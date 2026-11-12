@@ -122,7 +122,7 @@ fn load_icon() -> Result<Image<'static>> {
     #[cfg(target_os = "windows")]
     const TRAY_ICON: &[u8] = include_bytes!("../../assets/tray.ico");
 
-    Image::from_bytes(TRAY_ICON).context("decode tray icon")
+    Ok(Image::from_bytes(TRAY_ICON).context("decode tray icon")?)
 }
 
 fn build_menu(
