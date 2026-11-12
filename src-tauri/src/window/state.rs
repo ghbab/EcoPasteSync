@@ -11,6 +11,14 @@ use crate::core::Result;
 
 const STATE_FILENAME: &str = "window-state.json";
 
+/// 可恢复的最小窗口宽度（物理像素）。
+///
+/// Windows 下窗口最小化时 `inner_size()` 返回 0；若此时落盘，恢复后窗口会被
+/// 系统压到最小可跟踪尺寸，只剩一条标题栏。低于该阈值的存档一律视为损坏。
+const MIN_RESTORABLE_WIDTH: u32 = 200;
+/// 可恢复的最小窗口高度（物理像素），与 [`MIN_RESTORABLE_WIDTH`] 同一判定。
+const MIN_RESTORABLE_HEIGHT: u32 = 150;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WindowState {
     pub x: i32,
@@ -123,6 +131,12 @@ pub fn save_window_state(app: &AppHandle, label: &str) -> Result<()> {
         .get_webview_window(label)
         .ok_or_else(|| anyhow::anyhow!("window not found: {label}"))?;
 
+    // 最小化窗口的客户区尺寸为 0、位置为 -32000：此时落盘会把窗口"压扁"，
+    // 下次打开恢复成只剩标题栏。保留上一次的正常存档。
+    if window.is_minimized().unwrap_or(false) {
+        return Ok(());
+    }
+
     let pos = window.outer_position().map_err(|e| anyhow::anyhow!(e))?;
     let size = window.inner_size().map_err(|e| anyhow::anyhow!(e))?;
 
@@ -153,9 +167,13 @@ pub fn restore_window_state(app: &AppHandle, label: &str) -> Result<bool> {
         .get_webview_window(label)
         .ok_or_else(|| anyhow::anyhow!("window not found: {label}"))?;
 
-    window
-        .set_size(PhysicalSize::new(state.width, state.height))
-        .map_err(|e| anyhow::anyhow!(e))?;
+    // 历史存档可能来自最小化状态（宽高为 0），恢复后窗口只剩标题栏；
+    // 这类尺寸直接跳过，保留建窗时声明的默认尺寸。
+    if state.width >= MIN_RESTORABLE_WIDTH && state.height >= MIN_RESTORABLE_HEIGHT {
+        window
+            .set_size(PhysicalSize::new(state.width, state.height))
+            .map_err(|e| anyhow::anyhow!(e))?;
+    }
 
     let monitors = window
         .available_monitors()
