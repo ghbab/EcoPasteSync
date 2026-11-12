@@ -43,6 +43,10 @@ import { useKeyboardEvent } from "@/hooks/useKeyboardEvent";
 import { useTauriListen } from "@/hooks/useTauriListen";
 import { clipboardStatsState } from "@/stores/clipboardStats";
 import { clipboardViewState } from "@/stores/clipboardView";
+import {
+  clearFileTransferProgress,
+  setFileTransferProgress,
+} from "@/stores/fileTransfer";
 import { settingsState } from "@/stores/settings";
 import type {
   ClipboardAction,
@@ -77,6 +81,13 @@ interface ClipboardMenuActionPayload {
   action: ClipboardAction;
   groupId?: string;
   itemId: string;
+}
+
+interface FileTransferProgressPayload {
+  itemId: string;
+  transferredBytes: number;
+  totalBytes: number;
+  done: boolean;
 }
 
 /**
@@ -583,6 +594,28 @@ const List: FC = () => {
   };
 
   useTauriListen(TAURI_EVENT.CLIPBOARD_MENU_ACTION, handleMenuActionEvent);
+
+  /**
+   * 远端文件传输进度：`done` 为真表示本次传输结束（成功或失败），
+   * 清掉进度让卡片恢复正常；否则按已传字节数持续更新。
+   */
+  const handleFileTransferProgress = (event: {
+    payload: FileTransferProgressPayload;
+  }) => {
+    const { itemId, transferredBytes, totalBytes, done } = event.payload;
+
+    if (done) {
+      clearFileTransferProgress(itemId);
+      return;
+    }
+
+    setFileTransferProgress(itemId, { totalBytes, transferredBytes });
+  };
+
+  useTauriListen<FileTransferProgressPayload>(
+    TAURI_EVENT.SYNC_FILE_PROGRESS,
+    handleFileTransferProgress,
+  );
 
   const handleKeyDown = (event: KeyboardEvent) => {
     const eventModifierPressed = isMac ? event.metaKey : event.ctrlKey;

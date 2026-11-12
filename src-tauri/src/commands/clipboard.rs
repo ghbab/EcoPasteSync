@@ -372,7 +372,7 @@ pub async fn write_to_clipboard(
     plain: bool,
 ) -> Result<()> {
     let pool = db.pool().await;
-    let item = find_item_by_id(&pool, &id)
+    let mut item = find_item_by_id(&pool, &id)
         .await?
         .ok_or_else(|| AppError::Clipboard(format!("clipboard item not found: {id}")))?;
 
@@ -380,6 +380,13 @@ pub async fn write_to_clipboard(
     let write_plain =
         should_write_plain_for_copy(plain, item.kind, settings.clipboard.content.copy_plain);
     let hide_after_copy = settings.clipboard.content.copy_then_hide_window;
+
+    // 远端 files 条目：先把文件拉到本地缓存，把 content 换成真实可用的本地路径。
+    if !write_plain {
+        if let Some(paths) = crate::sync::ensure_files_local(&app, &item).await? {
+            item.content = paths.join("\n");
+        }
+    }
 
     crate::clipboard::write_to_clipboard(&store, guard.inner().as_ref(), &item, write_plain)?;
     mark_item_reused_if_enabled(&app, &pool, &id, item.kind).await?;
@@ -408,7 +415,7 @@ pub async fn paste_clipboard_item(
     plain: bool,
 ) -> Result<()> {
     let pool = db.pool().await;
-    let item = find_item_by_id(&pool, &id)
+    let mut item = find_item_by_id(&pool, &id)
         .await?
         .ok_or_else(|| AppError::Clipboard(format!("clipboard item not found: {id}")))?;
 
@@ -419,6 +426,13 @@ pub async fn paste_clipboard_item(
         settings.clipboard.content.paste_plain,
         settings.clipboard.content.paste_files_as_path,
     );
+
+    // 远端 files 条目：粘贴前先按需传输文件本体（进度经事件上报前端）。
+    if !write_plain {
+        if let Some(paths) = crate::sync::ensure_files_local(&app, &item).await? {
+            item.content = paths.join("\n");
+        }
+    }
 
     crate::clipboard::write_to_clipboard(&store, guard.inner().as_ref(), &item, write_plain)?;
     mark_item_reused_if_enabled(&app, &pool, &id, item.kind).await?;
@@ -852,6 +866,7 @@ async fn attach_file_entries(
             is_dir,
             is_image,
             exists,
+            remote: item.sync_source_device_id.is_some(),
             icon_path,
         });
     }

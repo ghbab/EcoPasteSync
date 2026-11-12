@@ -7,22 +7,51 @@
 //! 缓存目录按「远端路径列表」的 blake3 命名，重复接收同一批路径时复用同一目录。
 //! 传输不做断点续传：中途失败或用户取消一律丢弃半成品，下次从头再拉。
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
+use std::sync::{LazyLock, Mutex};
 
-use tauri::{AppHandle, Manager};
+use serde_json::json;
+use tauri::{AppHandle, Emitter, Manager};
 use tokio::io::AsyncWriteExt;
 
 use crate::core::{paths, AppError, Result};
 use crate::sync::client;
 use crate::sync::devices;
-use crate::sync::protocol::{SyncFileEntryDto, FILE_CHUNK_SIZE};
+use crate::sync::file_state::{self, SyncFileState};
+use crate::sync::protocol::{SyncFileEntryDto, EVENT_FILE_PROGRESS, FILE_CHUNK_SIZE};
 use crate::sync::SyncManager;
 
 /// 同步文件缓存的子目录名（位于 `<app_data_dir>/cache` 下）。
 const CACHE_SUBDIR: &str = "sync-files";
 /// 缓存文件名保留的最大字符数，避免中文等多字节字符超出文件系统 255 字节限制。
 const MAX_FILE_NAME_CHARS: usize = 120;
+
+/// 正在拉取的条目 id：同一卡片连点会并发清空同一缓存目录，必须串行化。
+static TRANSFERRING: LazyLock<Mutex<HashSet<String>>> =
+    LazyLock::new(|| Mutex::new(HashSet::new()));
+
+/// 单次条目传输的进度上下文；`item_id` 缺失时不上报进度。
+struct TransferTarget<'a> {
+    app: &'a AppHandle,
+    item_id: &'a str,
+    /// 当前文件之前的累计字节数。
+    transferred_base: u64,
+    total_bytes: u64,
+}
+
+impl TransferTarget<'_> {
+    /// 上报当前文件已写入 `local_offset` 字节后的整体进度。
+    fn report(&self, local_offset: u64) {
+        emit_transfer_progress(
+            self.app,
+            Some(self.item_id),
+            self.transferred_base + local_offset,
+            self.total_bytes,
+            false,
+        );
+    }
+}
 
 /// 把远端条目涉及的文件全部拉到本地缓存目录，返回本地路径列表。
 ///
@@ -33,6 +62,7 @@ pub async fn pull_files(
     remote_content: &str,
     source_device_id: &str,
     files: &[SyncFileEntryDto],
+    item_id: Option<&str>,
 ) -> Result<Vec<String>> {
     let pool = devices::pool(app).await;
     let device = match devices::find_device(&pool, source_device_id).await {
@@ -77,6 +107,17 @@ pub async fn pull_files(
 
     let mut names: HashMap<String, usize> = HashMap::new();
     let mut local_paths = Vec::with_capacity(files.len());
+    let total_bytes = files
+        .iter()
+        .filter_map(|entry| entry.size)
+        .fold(0u64, |acc, size| {
+            if size > 0 {
+                acc.saturating_add(size as u64)
+            } else {
+                acc
+            }
+        });
+    let mut transferred_base: u64 = 0;
 
     for (index, entry) in files.iter().enumerate() {
         if entry.is_dir {
@@ -96,6 +137,12 @@ pub async fn pull_files(
 
         let name = unique_file_name(&entry.path, index, &mut names);
         let local_path = root.join(&name);
+        let target = item_id.map(|item_id| TransferTarget {
+            app,
+            item_id,
+            transferred_base,
+            total_bytes,
+        });
         let pulled = pull_one_file(
             app,
             &device.shared_key,
@@ -103,6 +150,7 @@ pub async fn pull_files(
             entry,
             size as u64,
             &local_path,
+            target.as_ref(),
         )
         .await;
 
@@ -112,10 +160,155 @@ pub async fn pull_files(
             return Err(err);
         }
 
+        transferred_base = transferred_base.saturating_add(size as u64);
         local_paths.push(local_path.to_string_lossy().into_owned());
     }
 
     Ok(local_paths)
+}
+
+/// 把远端文件条目的文件拉到本地缓存，返回可写入剪贴板的本地路径。
+///
+/// 本机条目（没有同步状态记录）返回 `None`；远端条目返回 `Some(paths)`。
+/// 缓存仍然有效时直接复用，不重复传输。
+pub async fn ensure_item_files(
+    app: &AppHandle,
+    item_id: &str,
+    remote_content: &str,
+) -> Result<Option<Vec<String>>> {
+    let pool = devices::pool(app).await;
+    let Some(record) = file_state::find(&pool, item_id).await? else {
+        return Ok(None);
+    };
+
+    if record.state == SyncFileState::Unavailable {
+        return Err(command_error(
+            app,
+            crate::i18n::commands::Key::SyncFileUnavailable,
+        ));
+    }
+
+    if let Some(paths) = read_local_paths(record.local_paths_json.as_deref()) {
+        return Ok(Some(paths));
+    }
+
+    let Some(files_json) = record.files_json.as_deref() else {
+        return Err(command_error(
+            app,
+            crate::i18n::commands::Key::SyncFileUnavailable,
+        ));
+    };
+    let files: Vec<SyncFileEntryDto> = serde_json::from_str(files_json).map_err(|err| {
+        AppError::Other(anyhow::anyhow!(
+            "decode synced file fingerprints failed: {err}"
+        ))
+    })?;
+    if files.is_empty() {
+        return Err(command_error(
+            app,
+            crate::i18n::commands::Key::SyncFileUnavailable,
+        ));
+    }
+
+    // 同一 item 并发拉取会互相清空缓存目录，直接拒绝后到的请求。
+    let started = TRANSFERRING
+        .lock()
+        .expect("sync transferring poisoned")
+        .insert(item_id.to_owned());
+    if !started {
+        return Err(command_error(
+            app,
+            crate::i18n::commands::Key::SyncFileTransferBusy,
+        ));
+    }
+
+    let total_bytes = files
+        .iter()
+        .filter_map(|entry| entry.size)
+        .fold(0u64, |acc, size| {
+            if size > 0 {
+                acc.saturating_add(size as u64)
+            } else {
+                acc
+            }
+        });
+    emit_transfer_progress(app, Some(item_id), 0, total_bytes, false);
+
+    let result = pull_files(
+        app,
+        remote_content,
+        &record.device_id,
+        &files,
+        Some(item_id),
+    )
+    .await;
+
+    TRANSFERRING
+        .lock()
+        .expect("sync transferring poisoned")
+        .remove(item_id);
+
+    match result {
+        Ok(paths) => {
+            if let Ok(json) = serde_json::to_string(&paths) {
+                if let Err(err) = file_state::set_local_paths(&pool, item_id, &json).await {
+                    log::warn!("sync file transfer: save local paths failed: {err}");
+                }
+            }
+            emit_transfer_progress(app, Some(item_id), total_bytes, total_bytes, true);
+            Ok(Some(paths))
+        }
+        Err(err) => {
+            log::warn!("sync file transfer for item {item_id} failed: {err}");
+            emit_transfer_progress(app, Some(item_id), 0, total_bytes, true);
+            Err(command_error(
+                app,
+                crate::i18n::commands::Key::SyncFileTransferFailed,
+            ))
+        }
+    }
+}
+
+/// 读取并校验缓存的本地路径：全部文件仍存在才算命中。
+fn read_local_paths(raw: Option<&str>) -> Option<Vec<String>> {
+    let paths: Vec<String> = serde_json::from_str(raw?).ok()?;
+    if paths.is_empty() {
+        return None;
+    }
+    if !paths.iter().all(|path| Path::new(path).is_file()) {
+        return None;
+    }
+
+    Some(paths)
+}
+
+/// 上报文件传输进度；`item_id` 缺失时不发事件。
+fn emit_transfer_progress(
+    app: &AppHandle,
+    item_id: Option<&str>,
+    transferred_bytes: u64,
+    total_bytes: u64,
+    done: bool,
+) {
+    let Some(item_id) = item_id else {
+        return;
+    };
+
+    let payload = json!({
+        "itemId": item_id,
+        "transferredBytes": transferred_bytes,
+        "totalBytes": total_bytes,
+        "done": done,
+    });
+    if let Err(err) = app.emit(EVENT_FILE_PROGRESS, payload) {
+        log::warn!("sync file transfer: emit progress failed: {err}");
+    }
+}
+
+/// 构造命令层可展示的错误文案（跟随界面语言）。
+fn command_error(app: &AppHandle, key: crate::i18n::commands::Key) -> AppError {
+    let lang = crate::i18n::current_language(app);
+    AppError::Other(anyhow::anyhow!(crate::i18n::commands::label(lang, key)))
 }
 
 /// 拉取单个文件的全部块并校验完整性。
@@ -126,6 +319,7 @@ async fn pull_one_file(
     entry: &SyncFileEntryDto,
     size: u64,
     local_path: &Path,
+    target: Option<&TransferTarget<'_>>,
 ) -> Result<()> {
     let mut file = tokio::fs::File::create(local_path)
         .await
@@ -154,6 +348,10 @@ async fn pull_one_file(
         })?;
         hasher.update(&chunk);
         offset += len;
+
+        if let Some(target) = target {
+            target.report(offset);
+        }
     }
 
     file.flush()

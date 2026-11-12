@@ -665,6 +665,24 @@ pub(crate) fn current_platform_tag() -> &'static str {
 
 // ---- 模块级入口（供其它模块调用）----
 
+/// 粘贴/复制远端 files 条目时，把文件拉到本地缓存并返回可写回剪贴板的路径。
+///
+/// 返回 `None` 表示本机条目或已内联拉取完成，调用方直接使用原 content；
+/// 返回 `Some(paths)` 时调用方应改用这些本地路径写回剪贴板。
+pub async fn ensure_files_local(
+    app: &AppHandle,
+    item: &ClipboardItem,
+) -> Result<Option<Vec<String>>> {
+    if item.kind != ClipboardKind::Files {
+        return Ok(None);
+    }
+    if item.sync_source_device_id.is_none() {
+        return Ok(None);
+    }
+
+    file_transfer::ensure_item_files(app, &item.id, &item.content).await
+}
+
 /// 初始化：注册管理器并按设置决定是否启动。
 pub fn init(app: &AppHandle) -> Result<()> {
     let manager = Arc::new(SyncManager::new(app)?);
@@ -836,7 +854,7 @@ async fn resolve_incoming_files(
     }
 
     // 内联拉取失败时不阻断入库：降级为按需拉取，粘贴时重试。
-    match file_transfer::pull_files(app, &dto.content, source_device_id, files).await {
+    match file_transfer::pull_files(app, &dto.content, source_device_id, files, None).await {
         Ok(paths) => IncomingFiles::Pulled(paths),
         Err(err) => {
             log::warn!("sync ingest: pull files of item from {source_device_id} failed: {err}");
@@ -1024,6 +1042,11 @@ pub async fn ingest_remote_item(
     match upsert_item(&pool, &item).await {
         Ok(result) => {
             if let Some((state, total_bytes, file_count)) = deferred_files {
+                // 保存发送端文件指纹：粘贴时没有它就无法按块拉取。
+                let files_json = dto
+                    .files
+                    .as_deref()
+                    .and_then(|files| serde_json::to_string(files).ok());
                 if let Err(err) = file_state::upsert(
                     &pool,
                     &result.id,
@@ -1031,6 +1054,7 @@ pub async fn ingest_remote_item(
                     state,
                     total_bytes,
                     file_count,
+                    files_json.as_deref(),
                 )
                 .await
                 {

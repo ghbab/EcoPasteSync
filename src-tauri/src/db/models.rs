@@ -164,6 +164,8 @@ pub struct FileEntry {
     pub is_image: bool,
     /// 命令层组装时实时检测：路径是否仍存在于磁盘，前端据此对失效条目划删除线并回退预览。
     pub exists: bool,
+    /// 该条目由远端设备同步而来：前端显示「来自远端」标记，粘贴时按需传输文件本体。
+    pub remote: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub icon_path: Option<String>,
 }

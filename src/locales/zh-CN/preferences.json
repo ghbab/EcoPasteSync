@@ -615,8 +615,8 @@
           "title": "同步端口"
         },
         "syncFiles": {
-          "description": "文件路径记录参与同步，仅同步路径引用而非文件本体。",
-          "title": "同步文件路径"
+          "description": "文件条目参与局域网同步，文件本体在粘贴时按需传输。",
+          "title": "同步文件"
         },
         "syncImage": {
           "description": "图片内容参与局域网同步。",

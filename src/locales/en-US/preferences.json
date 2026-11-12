@@ -615,8 +615,8 @@
           "title": "Sync Port"
         },
         "syncFiles": {
-          "description": "File-path entries join LAN sync; only the path reference is synced.",
-          "title": "Sync File Paths"
+          "description": "File entries join LAN sync; the file bodies are transferred on demand when pasting.",
+          "title": "Sync Files"
         },
         "syncImage": {
           "description": "Images join LAN sync.",

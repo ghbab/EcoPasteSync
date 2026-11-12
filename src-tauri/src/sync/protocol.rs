@@ -14,6 +14,8 @@ pub const EVENT_DEVICES_UPDATED: &str = "sync://devices-updated";
 pub const EVENT_PAIR_REQUEST: &str = "sync://pair-request";
 /// 发起端配对结果事件（超时 / 对端拒绝 / 成功）。
 pub const EVENT_PAIR_RESULT: &str = "sync://pair-result";
+/// 远端文件按需传输进度事件（粘贴前拉取文件时上报）。
+pub const EVENT_FILE_PROGRESS: &str = "sync://file-transfer-progress";
 
 /// 明文端点：设备信息（配对前探测）。
 pub const API_INFO: &str = "/api/info";
