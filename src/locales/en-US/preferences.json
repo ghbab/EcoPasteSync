@@ -587,7 +587,11 @@
           },
           "pairRequestAccept": "Allow",
           "pairRequestContent": "Device \"{{name}}\" ({{platform}}) wants to sync the clipboard with this device",
+          "pairRequestReject": "Reject",
+          "pairRequestSasHint": "If the code below matches the one shown on the other device, click \"Allow\":",
           "pairRequestTitle": "Pairing Request",
+          "pairSasHint": "Make sure this code matches the one shown on the other device:",
+          "pairSasTitle": "Pairing Code",
           "pairSuccess": "Paired successfully",
           "receive": "Receive",
           "refresh": "Refresh nearby devices",
@@ -597,6 +601,10 @@
           "unblock": "Unignore",
           "unpair": "Unpair",
           "unpairConfirm": "After unpairing, this device will no longer be able to sync the clipboard with this device."
+        },
+        "discoverable": {
+          "description": "When off, this device is hidden from nearby lists and rejects new pairing requests. Paired devices keep syncing normally.",
+          "title": "Allow Discovery"
         },
         "enabled": {
           "description": "Pair with EcoPasteSync devices on the same LAN and sync the clipboard.",

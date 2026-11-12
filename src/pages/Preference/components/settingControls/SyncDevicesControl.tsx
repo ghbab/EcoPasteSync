@@ -24,6 +24,7 @@ import {
   requestSyncPair,
   requestSyncPairByAddress,
   type SyncPairResultPayload,
+  type SyncPairSasPayload,
   type SyncState,
   setSyncDeviceBlocked,
   setSyncDevicePermissions,
@@ -50,6 +51,8 @@ const SyncDevicesControl: FC = () => {
   const [manualPairingDeviceId, setManualPairingDeviceId] = useState<
     string | null
   >(null);
+  // 发起端配对验证码：与对方请求弹窗中的数字一致才说明没有中间人。
+  const [pairSas, setPairSas] = useState<string | null>(null);
 
   useMount(async () => {
     try {
@@ -65,11 +68,18 @@ const SyncDevicesControl: FC = () => {
     setSyncState(event.payload);
   });
 
+  // 发起端收到受理响应后展示验证码；配对结束后统一清空。
+  useTauriListen<SyncPairSasPayload>(TAURI_EVENT.SYNC_PAIR_SAS, (event) => {
+    setPairSas(event.payload.sas);
+  });
+
   // 发起端在收到配对结果后结束按钮 loading 并提示成功 / 失败原因。
   useTauriListen<SyncPairResultPayload>(
     TAURI_EVENT.SYNC_PAIR_RESULT,
     (event) => {
       const { accepted, deviceId, reason } = event.payload;
+
+      setPairSas(null);
 
       // 手动配对等待态：命令返回前就收到结果时按提交中的手动配对归属。
       const manualMatched =
@@ -178,6 +188,11 @@ const SyncDevicesControl: FC = () => {
     setManualAddress("");
     setManualSubmitting(false);
     setManualPairingDeviceId(null);
+    setPairSas(null);
+  };
+
+  const handlePairSasClose = () => {
+    setPairSas(null);
   };
 
   const handleRename = async (deviceId: string, name: string) => {
@@ -375,6 +390,36 @@ const SyncDevicesControl: FC = () => {
             )}
             value={manualAddress}
           />
+
+          {pairSas !== null ? (
+            <div className="flex flex-col gap-1">
+              <span className="text-ant-secondary text-xs">
+                {t("schema.settings.sync.devices.pairSasHint")}
+              </span>
+
+              <span className="text-center font-semibold text-lg tracking-widest">
+                {pairSas}
+              </span>
+            </div>
+          ) : null}
+        </div>
+      </Modal>
+
+      <Modal
+        centered
+        footer={null}
+        onCancel={handlePairSasClose}
+        open={pairSas !== null && !manualPairOpen}
+        title={t("schema.settings.sync.devices.pairSasTitle")}
+      >
+        <div className="flex flex-col gap-2 pt-1">
+          <span className="text-ant-secondary text-xs">
+            {t("schema.settings.sync.devices.pairSasHint")}
+          </span>
+
+          <span className="text-center font-semibold text-lg tracking-widest">
+            {pairSas}
+          </span>
         </div>
       </Modal>
     </div>

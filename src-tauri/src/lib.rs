@@ -155,6 +155,7 @@ pub fn run() {
             commands::get_sync_state,
             commands::request_sync_pair,
             commands::request_sync_pair_by_address,
+            commands::get_pending_sync_pair,
             commands::respond_sync_pair,
             commands::remove_sync_device,
             commands::rename_sync_device,

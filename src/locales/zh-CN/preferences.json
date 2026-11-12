@@ -587,7 +587,11 @@
           },
           "pairRequestAccept": "允许",
           "pairRequestContent": "设备「{{name}}」（{{platform}}）请求与本机同步剪贴板",
+          "pairRequestReject": "拒绝",
+          "pairRequestSasHint": "若下方验证码与对方设备显示的一致，请点击「允许」：",
           "pairRequestTitle": "配对请求",
+          "pairSasHint": "请核对与对方设备上显示的验证码是否一致：",
+          "pairSasTitle": "配对验证码",
           "pairSuccess": "配对成功",
           "receive": "接收",
           "refresh": "刷新附近设备",
@@ -597,6 +601,10 @@
           "unblock": "取消忽略",
           "unpair": "解除配对",
           "unpairConfirm": "解除配对后，该设备将无法再与本机同步剪贴板。"
+        },
+        "discoverable": {
+          "description": "关闭后本机不会出现在其它设备的附近列表中，也不接受新的配对请求；已配对设备仍可正常同步。",
+          "title": "允许被发现"
         },
         "enabled": {
           "description": "开启后可与同一局域网内的 EcoPasteSync 设备配对并同步剪贴板。",

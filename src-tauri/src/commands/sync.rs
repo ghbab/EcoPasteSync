@@ -64,6 +64,17 @@ pub async fn request_sync_pair_by_address(
     client::start_pairing_with_address(app, manager.inner().clone(), &address, default_port).await
 }
 
+/// 读取最近一条待确认的配对请求。
+///
+/// 配对窗口由 Rust 按需创建，WebView 加载晚于事件发送，页面挂载后用它补拉；
+/// 无有效请求时返回 `null`，窗口据此自动关闭。
+#[tauri::command]
+pub async fn get_pending_sync_pair(
+    manager: State<'_, Arc<SyncManager>>,
+) -> Result<Option<crate::sync::PendingPairDto>> {
+    Ok(manager.pending_pair_dto())
+}
+
 /// 应答收到的配对请求（接收端用户在确认弹窗点「允许 / 拒绝」）。
 #[tauri::command]
 pub async fn respond_sync_pair(

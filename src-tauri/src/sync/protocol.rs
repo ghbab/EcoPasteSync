@@ -10,8 +10,10 @@ pub const SERVICE_TYPE: &str = "_ecopaste._tcp.local.";
 
 /// 附近 / 已配对设备列表变化事件。
 pub const EVENT_DEVICES_UPDATED: &str = "sync://devices-updated";
-/// 收到配对请求事件（接收端前端弹确认框）。
+/// 收到配对请求事件（接收端前端弹确认框，载荷携带 SAS 供人工比对）。
 pub const EVENT_PAIR_REQUEST: &str = "sync://pair-request";
+/// 配对 SAS 验证码事件（发起端收到受理响应后展示，与接收端弹窗内的数字比对）。
+pub const EVENT_PAIR_SAS: &str = "sync://pair-sas";
 /// 发起端配对结果事件（超时 / 对端拒绝 / 成功）。
 pub const EVENT_PAIR_RESULT: &str = "sync://pair-result";
 /// 远端文件按需传输进度事件（粘贴前拉取文件时上报）。
@@ -23,6 +25,8 @@ pub const API_INFO: &str = "/api/info";
 pub const API_PAIR: &str = "/api/pair";
 /// 明文端点：配对结果轮询。
 pub const API_PAIR_STATUS: &str = "/api/pair/status";
+/// 加密端点：认证探测（只校验调用方持有共享密钥，用于地址变更确认与在线探测）。
+pub const API_VERIFY: &str = "/api/verify";
 /// 加密端点：推送单条剪贴板条目。
 pub const API_CLIPBOARD_PUSH: &str = "/api/clipboard/push";
 /// 加密端点：按时间游标增量拉取剪贴板条目。
@@ -44,6 +48,13 @@ pub const HEADER_SIGNATURE: &str = "x-ecopaste-signature";
 
 /// 单次 pull 返回的最大条数（断线补偿上限，防止老设备首次全量拖垮对端）。
 pub const PULL_PAGE_LIMIT: i64 = 50;
+/// 接收端允许的清单条目上限（目录展开后的文件与目录总数）。
+///
+/// 接收端不信任发送端声明的规模：超过上限的清单按「仅路径可用」处理，
+/// 避免海量条目在归组与目录重建时耗尽内存。
+pub const FILE_MANIFEST_LIMIT: usize = 8192;
+/// 接收端允许的目录相对路径最大层级（`/` 分隔的段数）。
+pub const FILE_MANIFEST_DEPTH_LIMIT: usize = 32;
 
 /// 设备信息（明文 `/api/info` 响应与 mDNS TXT 记录共用字段）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -57,24 +68,44 @@ pub struct DeviceInfoDto {
     pub version: String,
 }
 
+/// 配对请求里设备 id 的最大字符数（正常为 UUID 36 字符）。
+///
+/// 超过上限的请求在接收端直接按非法输入拒绝，避免异常值进入钥匙串条目名。
+pub const PAIR_DEVICE_ID_MAX_CHARS: usize = 128;
+/// 配对请求里设备名的最大字符数，防止超长文本撑破配对窗口。
+pub const PAIR_DEVICE_NAME_MAX_CHARS: usize = 64;
+/// 配对请求里平台标识的最大字符数。
+pub const PAIR_PLATFORM_MAX_CHARS: usize = 16;
+
 /// 配对请求（明文 `/api/pair` 请求体）。
 ///
-/// `seed` 为发起方生成的 32 字节随机数的 hex，双方据此派生共享密钥；
-/// 明文传输在「接收端用户尚未确认」的前提下可接受（与 CrossPaste V1 token 同级），
-/// 派生后的密钥从不明文上线。
+/// `public_key` 是发起方的 X25519 临时公钥（hex）：接收方在 202 响应里返回
+/// 自己的临时公钥，双方各自做 ECDH 派生共享密钥。私钥从不上线，即使配对
+/// 请求被窃听也无法还原共享密钥；配对期间两端比对 SAS 可发现中间人。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PairRequestDto {
     pub device_id: String,
     pub name: String,
     pub platform: String,
-    pub seed: String,
+    pub public_key: String,
     /// 发起方同步服务监听端口。
     ///
     /// 跨网段手动配对时接收端无法通过 mDNS 获得发起方地址，
     /// 用「TCP 源 IP + 该端口」拼出回连地址，保证配对后双向推送可用。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub port: Option<u16>,
+}
+
+/// 配对请求受理响应（202 响应体）。
+///
+/// 携带接收方临时公钥，发起方据此完成 ECDH 并派生共享密钥。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PairAcceptedDto {
+    pub status: PairStatusDto,
+    /// 接收方 X25519 临时公钥（hex）。
+    pub public_key: String,
 }
 
 /// 配对结果轮询响应。
@@ -96,6 +127,16 @@ pub enum PairStatusDto {
 pub fn file_chunk_signature_target(path: &str, offset: u64, len: u64) -> String {
     let digest = blake3::hash(path.as_bytes()).to_hex().to_string();
     format!("{API_FILE_CHUNK}|{digest}|{offset}|{len}")
+}
+
+/// 增量拉取端点签名串。
+///
+/// `since` 游标纳入签名，避免重放认证头后修改游标、扩大或缩小拉取范围。
+pub fn pull_signature_target(since: Option<&str>) -> String {
+    match since {
+        Some(value) if !value.is_empty() => format!("{API_CLIPBOARD_PULL}|since={value}"),
+        _ => API_CLIPBOARD_PULL.to_owned(),
+    }
 }
 
 /// 单个文件的传输指纹（目录会被递归展开为「目录根 + 子树文件」多条记录）。
@@ -126,6 +167,31 @@ pub struct SyncFileEntryDto {
     /// 目录是否已完整枚举；超限、含符号链接或读取失败时为 `false`。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub complete: Option<bool>,
+}
+
+/// 校验远端文件清单是否超出接收端的条目数 / 目录深度上限。
+///
+/// 发送端采集时已有自己的限制，但接收端不能依赖对端自律：伪造清单可能把
+/// 归组、目录重建与内存占用放大到不可控规模。
+pub fn file_manifest_exceeds_limits(files: &[SyncFileEntryDto]) -> bool {
+    if files.len() > FILE_MANIFEST_LIMIT {
+        return true;
+    }
+
+    for entry in files {
+        let Some(rel_path) = entry.rel_path.as_deref() else {
+            continue;
+        };
+        let depth = rel_path
+            .split('/')
+            .filter(|segment| !segment.is_empty())
+            .count();
+        if depth > FILE_MANIFEST_DEPTH_LIMIT {
+            return true;
+        }
+    }
+
+    false
 }
 
 /// 一条待同步的剪贴板条目（加密载荷的明文结构）。

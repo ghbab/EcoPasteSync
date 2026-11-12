@@ -306,12 +306,20 @@ export interface SyncPairRequestPayload {
   deviceId: string;
   name: string;
   platform: string;
+  /** 6 位配对验证码，需与对方设备显示的数字一致。 */
+  sas: string;
 }
 
 export interface SyncPairResultPayload {
   deviceId: string;
   accepted: boolean;
   reason: string | null;
+}
+
+export interface SyncPairSasPayload {
+  deviceId: string;
+  /** 6 位配对验证码，需与对方设备显示的数字一致。 */
+  sas: string;
 }
 
 /**
@@ -1473,6 +1481,19 @@ export const requestSyncPairByAddress = (address: string) => {
     TAURI_COMMAND.REQUEST_SYNC_PAIR_BY_ADDRESS,
     "commands:labels.requestPairByAddress",
     { address },
+  );
+};
+
+/**
+ * 读取最近一条待确认的配对请求；无有效请求时返回 `null`。
+ *
+ * 配对窗口由 Rust 按需创建，页面加载可能晚于 `sync://pair-request` 事件，
+ * 挂载后用它补拉当前请求。
+ */
+export const getPendingSyncPair = () => {
+  return call<SyncPairRequestPayload | null>(
+    TAURI_COMMAND.GET_PENDING_SYNC_PAIR,
+    "commands:labels.loadPendingSyncPair",
   );
 };
 

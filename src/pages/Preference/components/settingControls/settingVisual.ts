@@ -69,6 +69,7 @@ const SETTING_ICON_MAP: Record<string, string> = {
   "source.excludedApps": "i-lucide:shield-ban",
   "sync.deviceName": "i-lucide:pen-line",
   "sync.devices": "i-lucide:monitor-smartphone",
+  "sync.discoverable": "i-lucide:radar",
   "sync.enabled": "i-lucide:repeat-2",
   "sync.fileMaxSize": "i-lucide:hard-drive",
   "sync.fileThreshold": "i-lucide:gauge",

@@ -342,6 +342,10 @@ mod tests {
             parsed.clipboard.window.select_group_on_open,
             crate::settings::WINDOW_OPEN_SELECTION_PRESERVE
         );
+        assert!(
+            parsed.sync.discoverable,
+            "discovery is enabled for existing settings files without the field"
+        );
     }
 
     #[test]

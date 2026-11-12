@@ -17,6 +17,7 @@ export const TAURI_EVENT = {
   SYNC_FILE_PROGRESS: "sync://file-transfer-progress",
   SYNC_PAIR_REQUEST: "sync://pair-request",
   SYNC_PAIR_RESULT: "sync://pair-result",
+  SYNC_PAIR_SAS: "sync://pair-sas",
   WINDOW_BEFORE_DESTROY: "window://before-destroy",
   WINDOW_LIFECYCLE: "window://lifecycle",
   WINDOW_VISIBILITY: "window://visibility",

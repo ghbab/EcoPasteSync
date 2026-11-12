@@ -34,6 +34,7 @@
     "loadAutostart": "Load launch-at-login state",
     "loadClipboardGroups": "Load groups",
     "loadClipboardList": "Load list",
+    "loadPendingSyncPair": "Load pending pairing request",
     "loadPreviewContent": "Load preview content",
     "loadPreviewState": "Load preview state",
     "loadRunAsAdminStatus": "Load administrator launch state",

@@ -1,4 +1,3 @@
-import SyncPairRequestListener from "@/components/SyncPairRequestListener";
 import { useClipboardWindowEditableFocus } from "@/hooks/useClipboardWindowEditableFocus";
 import Footer from "./components/Footer";
 import Group from "./components/Group";
@@ -20,9 +19,6 @@ const Clipboard = () => {
       <List />
 
       <Footer />
-
-      {/* 常驻监听局域网同步配对请求，仅剪贴板主窗口挂载。 */}
-      <SyncPairRequestListener />
     </div>
   );
 };

@@ -636,6 +636,11 @@ pub struct Sync {
     pub device_name: String,
     /// 同步服务器首选端口；被占用时自动 +1 探测（实际端口随 mDNS 广播）。
     pub port: u16,
+    /// 是否允许被局域网内其它设备发现。
+    ///
+    /// 关闭后不再广播 mDNS 服务，也不再接受新的配对请求；已配对设备之间的
+    /// 同步不依赖广播，仍按记录的地址继续工作。
+    pub discoverable: bool,
     /// 文本条目（含 HTML / RTF / URL 等子类型）是否同步。
     pub sync_text: bool,
     /// 图片条目是否同步。
@@ -656,6 +661,7 @@ impl Default for Sync {
             enabled: false,
             device_name: String::new(),
             port: 39782,
+            discoverable: true,
             sync_text: true,
             sync_image: true,
             sync_files: true,

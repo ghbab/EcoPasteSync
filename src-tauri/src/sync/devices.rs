@@ -1,6 +1,12 @@
 //! 同步设备仓储：`sync_devices`（已配对互信设备）与 `sync_blacklist`（忽略名单）的 CRUD。
 //!
 //! 全部走 `SqlitePool`，遵循项目 sqlx 约定（`query` / `query_as`，不用宏）。
+//! 共享密钥存系统钥匙串；认证热路径优先读进程内缓存，避免逐请求访问钥匙串。
+
+#[cfg(not(test))]
+use std::collections::HashMap;
+#[cfg(not(test))]
+use std::sync::{LazyLock, RwLock};
 
 use chrono::{DateTime, Utc};
 use sqlx::{QueryBuilder, Sqlite, SqlitePool};
@@ -8,14 +14,77 @@ use tauri::AppHandle;
 
 use crate::core::{AppError, Result};
 use crate::db::models::Platform;
+use crate::sync::secrets;
 
-/// 已配对设备记录（DB 行结构，`shared_key` 不出模块）。
+/// 进程内共享密钥缓存（device_id → 密钥 hex）。
+///
+/// 系统钥匙串读取是同步阻塞调用；认证是每个同步请求的热路径，逐请求读取会
+/// 阻塞异步 worker，局域网内高频请求即可放大为资源耗尽。缓存只在配对写入与
+/// 解除配对时更新，进程重启后按需回填。
+#[cfg(not(test))]
+static SHARED_KEY_CACHE: LazyLock<RwLock<HashMap<String, String>>> =
+    LazyLock::new(|| RwLock::new(HashMap::new()));
+
+/// 读取共享密钥：优先缓存，未命中再访问系统钥匙串并回填。
+#[cfg(not(test))]
+fn load_shared_key(device_id: &str) -> Result<Option<String>> {
+    if let Some(cached) = SHARED_KEY_CACHE
+        .read()
+        .expect("shared key cache poisoned")
+        .get(device_id)
+        .cloned()
+    {
+        return Ok(Some(cached));
+    }
+
+    let loaded = secrets::load(device_id)?;
+    if let Some(key) = loaded.as_ref() {
+        SHARED_KEY_CACHE
+            .write()
+            .expect("shared key cache poisoned")
+            .insert(device_id.to_owned(), key.clone());
+    }
+
+    Ok(loaded)
+}
+
+/// 测试构建直接读内存钥匙串，避免全局缓存在并行用例间串数据。
+#[cfg(test)]
+fn load_shared_key(device_id: &str) -> Result<Option<String>> {
+    secrets::load(device_id)
+}
+
+/// 配对写入后同步缓存，认证热路径立即命中。
+#[cfg(not(test))]
+fn cache_shared_key(device_id: &str, key: &str) {
+    SHARED_KEY_CACHE
+        .write()
+        .expect("shared key cache poisoned")
+        .insert(device_id.to_owned(), key.to_owned());
+}
+
+#[cfg(test)]
+fn cache_shared_key(_device_id: &str, _key: &str) {}
+
+/// 解除配对 / 拉黑后移除缓存，避免残留已失效密钥。
+#[cfg(not(test))]
+fn forget_shared_key(device_id: &str) {
+    SHARED_KEY_CACHE
+        .write()
+        .expect("shared key cache poisoned")
+        .remove(device_id);
+}
+
+#[cfg(test)]
+fn forget_shared_key(_device_id: &str) {}
+
+/// 已配对设备记录（DB 行结构，`shared_key` 不落库，放系统钥匙串）。
 #[derive(Debug, Clone)]
 pub struct SyncDeviceRecord {
     pub device_id: String,
     pub name: String,
     pub platform: Platform,
-    /// 共享密钥 hex（64 字符）。
+    /// 共享密钥 hex（64 字符），仅存在于内存与系统钥匙串。
     pub shared_key: String,
     pub allow_send: bool,
     pub allow_receive: bool,
@@ -27,7 +96,7 @@ pub struct SyncDeviceRecord {
     pub created_at: DateTime<Utc>,
 }
 
-const SELECT_DEVICE: &str = "SELECT device_id, name, platform, shared_key, allow_send, \
+const SELECT_DEVICE: &str = "SELECT device_id, name, platform, allow_send, \
      allow_receive, last_seen_at, last_address, last_pull_at, created_at \
      FROM sync_devices";
 
@@ -48,6 +117,9 @@ fn platform_tag(platform: Platform) -> &'static str {
 
 /// 新增或覆盖一条已配对设备（配对确认时调用）。
 pub async fn upsert_device(pool: &SqlitePool, record: &SyncDeviceRecord) -> Result<()> {
+    // 共享密钥只写系统钥匙串，数据库列保留但不存明文。
+    secrets::store(&record.device_id, &record.shared_key)?;
+
     let now = Utc::now();
     sqlx::query(
         "INSERT INTO sync_devices \
@@ -68,7 +140,7 @@ pub async fn upsert_device(pool: &SqlitePool, record: &SyncDeviceRecord) -> Resu
     .bind(record.device_id.as_str())
     .bind(record.name.as_str())
     .bind(platform_tag(record.platform))
-    .bind(record.shared_key.as_str())
+    .bind("")
     .bind(record.allow_send)
     .bind(record.allow_receive)
     .bind(record.last_seen_at)
@@ -79,10 +151,15 @@ pub async fn upsert_device(pool: &SqlitePool, record: &SyncDeviceRecord) -> Resu
     .execute(pool)
     .await
     .map_err(|err| AppError::Other(err.into()))?;
+
+    // SQL 成功后再回填缓存：数据库写入失败时不保留未落库设备的缓存。
+    cache_shared_key(&record.device_id, &record.shared_key);
     Ok(())
 }
 
 /// 列出全部已配对设备，按名称排序（前端列表稳定展示）。
+///
+/// 钥匙串里没有密钥的记录（被系统清理或旧版本残留）不返回，前端按未配对处理。
 pub async fn list_devices(pool: &SqlitePool) -> Result<Vec<SyncDeviceRecord>> {
     let mut qb: QueryBuilder<Sqlite> = QueryBuilder::new(SELECT_DEVICE);
     qb.push(" ORDER BY name ASC");
@@ -92,10 +169,20 @@ pub async fn list_devices(pool: &SqlitePool) -> Result<Vec<SyncDeviceRecord>> {
         .fetch_all(pool)
         .await
         .map_err(|err| AppError::Other(err.into()))?;
-    Ok(rows.into_iter().map(RawDeviceRow::into_record).collect())
+
+    let mut devices = Vec::with_capacity(rows.len());
+    for row in rows {
+        if let Some(record) = row.into_record()? {
+            devices.push(record);
+        }
+    }
+
+    Ok(devices)
 }
 
 /// 按 device_id 查找已配对设备（服务端鉴权热路径）。
+///
+/// 钥匙串里没有密钥时返回 `None`：记录虽在但无法认证，应按未配对处理。
 pub async fn find_device(pool: &SqlitePool, device_id: &str) -> Result<Option<SyncDeviceRecord>> {
     let mut qb: QueryBuilder<Sqlite> = QueryBuilder::new(SELECT_DEVICE);
     qb.push(" WHERE device_id = ")
@@ -106,7 +193,11 @@ pub async fn find_device(pool: &SqlitePool, device_id: &str) -> Result<Option<Sy
         .fetch_optional(pool)
         .await
         .map_err(|err| AppError::Other(err.into()))?;
-    Ok(row.map(RawDeviceRow::into_record))
+
+    match row {
+        Some(row) => row.into_record(),
+        None => Ok(None),
+    }
 }
 
 /// 删除已配对设备（解除配对）。返回是否存在。
@@ -116,6 +207,12 @@ pub async fn remove_device(pool: &SqlitePool, device_id: &str) -> Result<bool> {
         .execute(pool)
         .await
         .map_err(|err| AppError::Other(err.into()))?;
+
+    // 数据库记录可能早已不存在，但钥匙串条目仍要清理，避免残留密钥。
+    // 先清缓存再删钥匙串：即使钥匙串删除失败，认证热路径也不会再命中旧密钥。
+    forget_shared_key(device_id);
+    secrets::remove(device_id)?;
+
     Ok(result.rows_affected() > 0)
 }
 
@@ -245,7 +342,6 @@ struct RawDeviceRow {
     device_id: String,
     name: String,
     platform: String,
-    shared_key: String,
     allow_send: bool,
     allow_receive: bool,
     last_seen_at: Option<DateTime<Utc>>,
@@ -255,19 +351,28 @@ struct RawDeviceRow {
 }
 
 impl RawDeviceRow {
-    fn into_record(self) -> SyncDeviceRecord {
-        SyncDeviceRecord {
+    /// 转换为记录，并从系统钥匙串加载共享密钥。
+    ///
+    /// 钥匙串里没有密钥时返回 `None`：设备记录残留但无法认证，
+    /// 应按未配对处理（允许重新配对，而不是永远 409）。
+    fn into_record(self) -> Result<Option<SyncDeviceRecord>> {
+        // 认证热路径走进程内缓存，避免每个同步请求都同步读取系统钥匙串。
+        let Some(shared_key) = load_shared_key(&self.device_id)? else {
+            return Ok(None);
+        };
+
+        Ok(Some(SyncDeviceRecord {
             device_id: self.device_id,
             name: self.name,
             platform: parse_platform(&self.platform),
-            shared_key: self.shared_key,
+            shared_key,
             allow_send: self.allow_send,
             allow_receive: self.allow_receive,
             last_seen_at: self.last_seen_at,
             last_address: self.last_address,
             last_pull_at: self.last_pull_at,
             created_at: self.created_at,
-        }
+        }))
     }
 }
 

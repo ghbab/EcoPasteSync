@@ -20,7 +20,9 @@ use crate::core::{paths, AppError, Result};
 use crate::sync::client;
 use crate::sync::devices;
 use crate::sync::file_state::{self, SyncFileState};
-use crate::sync::protocol::{SyncFileEntryDto, EVENT_FILE_PROGRESS, FILE_CHUNK_SIZE};
+use crate::sync::protocol::{
+    file_manifest_exceeds_limits, SyncFileEntryDto, EVENT_FILE_PROGRESS, FILE_CHUNK_SIZE,
+};
 use crate::sync::SyncManager;
 
 /// 同步文件缓存的子目录名（位于 `<app_data_dir>/cache` 下）。
@@ -77,6 +79,14 @@ pub async fn pull_files(
     files: &[SyncFileEntryDto],
     item_id: Option<&str>,
 ) -> Result<Vec<String>> {
+    // 清单规模上限校验：入库时已校验一次，按需拉取还要再挡一次，
+    // 避免从数据库读出的陈旧清单绕过检查。
+    if file_manifest_exceeds_limits(files) {
+        return Err(AppError::Other(anyhow::anyhow!(
+            "file manifest exceeds limits"
+        )));
+    }
+
     let pool = devices::pool(app).await;
     let device = match devices::find_device(&pool, source_device_id).await {
         Ok(Some(device)) => device,
@@ -164,16 +174,21 @@ pub async fn pull_files(
             // 按相对路径排序，保证多文件写入顺序稳定、进度推进可预期。
             children.sort_by(|left, right| left.rel_path.cmp(&right.rel_path));
 
+            // 每个顶层目录独立维护名称作用域：清洗后同名的兄弟路径追加序号，
+            // 避免不同远端路径映射到同一本地路径互相覆盖。
+            let mut rel_mapper = RelPathMapper::new();
+
             for child in children {
                 let Some(rel_path) = child.rel_path.as_deref() else {
                     continue;
                 };
-                let Some(dest) = join_rel_path(&local_root, rel_path) else {
+                let Some(relative) = rel_mapper.map(rel_path) else {
                     discard(&root).await;
                     return Err(AppError::Other(anyhow::anyhow!(
                         "invalid relative path from remote: {rel_path}"
                     )));
                 };
+                let dest = local_root.join(&relative);
 
                 // 子树目录（含空目录）先建好；文件稍后落到同一层级。
                 if child.is_dir {
@@ -476,29 +491,75 @@ async fn discard(root: &Path) {
     }
 }
 
-/// 把远端相对路径安全拼到本地目录下。
+/// 把远端相对路径映射为缓存内的本地相对路径。
 ///
-/// 拒绝绝对路径、`.` / `..` 与空段，防止远端清单把文件写到缓存目录之外；
-/// 每段仍走 [`sanitize_file_name`] 过滤跨平台非法字符与保留设备名。
-fn join_rel_path(root: &Path, rel_path: &str) -> Option<PathBuf> {
-    let mut path = root.to_path_buf();
+/// 每段都经 [`sanitize_file_name`] 清洗；同一父目录下清洗结果冲突时追加序号，
+/// 避免不同远端路径映射到同一本地路径互相覆盖。只接受相对路径：空段、
+/// `.`、`..` 与绝对路径一律拒绝，防止写出缓存目录。
+struct RelPathMapper {
+    /// 父目录（本地相对路径的小写文本）→ 该目录下已用的小写名称。
+    used: HashMap<String, HashSet<String>>,
+}
 
-    for part in rel_path.split('/') {
-        if part.is_empty() || part == "." || part == ".." {
-            return None;
+impl RelPathMapper {
+    fn new() -> Self {
+        Self {
+            used: HashMap::new(),
         }
-        let name = sanitize_file_name(part);
-        if name.is_empty() {
-            return None;
-        }
-        path.push(name);
     }
 
-    if path == root {
-        return None;
+    /// 返回本地相对路径；遇到非法段时返回 `None`。
+    fn map(&mut self, rel_path: &str) -> Option<PathBuf> {
+        let mut local = PathBuf::new();
+
+        for part in rel_path.split('/') {
+            if part.is_empty() || part == "." || part == ".." {
+                return None;
+            }
+            let base = sanitize_file_name(part);
+            if base.is_empty() {
+                return None;
+            }
+
+            // 以父目录的本地相对路径作为作用域，不同目录下允许同名。
+            let scope = local.to_string_lossy().to_lowercase();
+            let used = self.used.entry(scope).or_default();
+            let name = unique_in_scope(&base, used);
+            local.push(name);
+        }
+
+        if local.as_os_str().is_empty() {
+            return None;
+        }
+
+        Some(local)
+    }
+}
+
+/// 在同一父目录内取唯一名称：冲突时在扩展名前追加序号。
+///
+/// 比较时统一转小写：Windows 文件系统不区分大小写，`A.txt` 与 `a.txt`
+/// 落盘后会互相覆盖。
+fn unique_in_scope(base: &str, used: &mut HashSet<String>) -> String {
+    let key = base.to_lowercase();
+    if used.insert(key) {
+        return base.to_owned();
     }
 
-    Some(path)
+    let mut suffix: usize = 2;
+    loop {
+        let candidate = match base.rsplit_once('.') {
+            Some((stem, ext)) if !stem.is_empty() && !ext.is_empty() => {
+                format!("{stem} ({suffix}).{ext}")
+            }
+            _ => format!("{base} ({suffix})"),
+        };
+
+        if used.insert(candidate.to_lowercase()) {
+            return candidate;
+        }
+        suffix += 1;
+    }
 }
 
 /// 生成缓存内文件名：保留原名便于识别，过滤跨平台非法字符，同批次重名追加序号。
@@ -630,38 +691,46 @@ mod tests {
     }
 
     #[test]
-    fn join_rel_path_builds_nested_path_under_root() {
-        let root = Path::new("/tmp/cache/item-1");
+    fn rel_path_mapper_builds_nested_path() {
+        let mut mapper = RelPathMapper::new();
 
         assert_eq!(
-            join_rel_path(root, "docs/2024/a.txt"),
-            Some(PathBuf::from("/tmp/cache/item-1/docs/2024/a.txt"))
+            mapper.map("docs/2024/a.txt"),
+            Some(PathBuf::from("docs/2024/a.txt"))
         );
-        assert_eq!(
-            join_rel_path(root, "a.txt"),
-            Some(PathBuf::from("/tmp/cache/item-1/a.txt"))
-        );
+        // 不同目录下允许同名。
+        assert_eq!(mapper.map("docs/b.txt"), Some(PathBuf::from("docs/b.txt")));
     }
 
     #[test]
-    fn join_rel_path_rejects_escaping_segments() {
-        let root = Path::new("/tmp/cache/item-1");
+    fn rel_path_mapper_rejects_escaping_segments() {
+        let mut mapper = RelPathMapper::new();
 
         // 目录穿越、绝对路径与空段一律拒绝，避免写到缓存目录之外。
-        assert_eq!(join_rel_path(root, "../secret.txt"), None);
-        assert_eq!(join_rel_path(root, "docs/../../secret.txt"), None);
-        assert_eq!(join_rel_path(root, "/etc/passwd"), None);
-        assert_eq!(join_rel_path(root, "docs//a.txt"), None);
-        assert_eq!(join_rel_path(root, ""), None);
+        assert_eq!(mapper.map("../secret.txt"), None);
+        assert_eq!(mapper.map("docs/../../secret.txt"), None);
+        assert_eq!(mapper.map("/etc/passwd"), None);
+        assert_eq!(mapper.map("docs//a.txt"), None);
+        assert_eq!(mapper.map(""), None);
     }
 
     #[test]
-    fn join_rel_path_sanitizes_invalid_chars() {
-        let root = Path::new("/tmp/cache/item-1");
+    fn rel_path_mapper_dedupes_sanitized_siblings() {
+        let mut mapper = RelPathMapper::new();
 
+        // `a:b.txt` 与 `a?b.txt` 清洗后同名，第二个必须追加序号而不是覆盖。
         assert_eq!(
-            join_rel_path(root, "docs/a:b.txt"),
-            Some(PathBuf::from("/tmp/cache/item-1/docs/a_b.txt"))
+            mapper.map("docs/a:b.txt"),
+            Some(PathBuf::from("docs/a_b.txt"))
+        );
+        assert_eq!(
+            mapper.map("docs/a?b.txt"),
+            Some(PathBuf::from("docs/a_b (2).txt"))
+        );
+        // 大小写不同的同名也要去重（Windows 文件系统不区分大小写）。
+        assert_eq!(
+            mapper.map("docs/A_B.TXT"),
+            Some(PathBuf::from("docs/A_B (3).TXT"))
         );
     }
 }

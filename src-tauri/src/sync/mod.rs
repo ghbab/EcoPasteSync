@@ -5,13 +5,15 @@
 //!   TXT 记录携带 device_id / 设备名 / 平台，端口随实例广播。
 //! - **传输**：本机常驻 axum HTTP 服务器，配对设备间以 reqwest 互推 / 互拉；
 //!   请求经 blake3 keyed hash 签名认证，报文体经 ChaCha20-Poly1305 加密。
-//! - **信任**：显式配对——发起方携带随机 seed 请求，接收方用户在前端确认后
-//!   双方各自派生一致共享密钥入库；未配对设备无法推送任何内容。
+//! - **信任**：显式配对——双方交换临时 X25519 公钥并各自派生共享密钥，
+//!   接收方用户在前端确认（并比对 SAS 验证码）后密钥才入库；未配对设备
+//!   无法推送任何内容。
 //! - **数据流**：新剪贴板条目实时推送（图片推元数据、接收端回源拉取字节）；
 //!   已配对设备重新上线时按 `last_pull_at` 游标增量拉取做断线补偿。
 //!
 //! 事件契约（前端 `src/constants/events.ts`）：
-//! `sync://devices-updated` / `sync://pair-request` / `sync://pair-result`。
+//! `sync://devices-updated` / `sync://pair-request` / `sync://pair-sas` /
+//! `sync://pair-result`。
 
 pub(crate) mod client;
 mod crypto;
@@ -20,6 +22,7 @@ mod discovery;
 mod file_state;
 mod file_transfer;
 mod protocol;
+mod secrets;
 mod server;
 
 use std::collections::{HashMap, HashSet};
@@ -40,16 +43,20 @@ use crate::db::models::{ClipboardItem, ClipboardKind, ClipboardSubKind, Platform
 use crate::settings::{Settings, SettingsStore};
 use file_state::SyncFileState;
 
+use protocol::{
+    file_manifest_exceeds_limits, PairAcceptedDto, PairRequestDto, SyncClipboardItemDto,
+    SyncFileEntryDto, EVENT_DEVICES_UPDATED, EVENT_PAIR_REQUEST, EVENT_PAIR_RESULT, EVENT_PAIR_SAS,
+};
 pub use protocol::{
     BlockedDeviceDto, DeviceInfoDto, NearbyDeviceDto, PairStatusDto, PairedDeviceDto,
-};
-use protocol::{
-    PairRequestDto, SyncClipboardItemDto, SyncFileEntryDto, EVENT_DEVICES_UPDATED,
-    EVENT_PAIR_REQUEST, EVENT_PAIR_RESULT,
 };
 
 /// 配对请求的受理有效期（秒）：超时后 B 端不再接受确认。
 const PAIR_PENDING_TTL_SECS: u64 = 120;
+/// 待确认配对请求的最大数量，避免大量陌生设备堆满内存与前端弹窗队列。
+const PAIR_PENDING_LIMIT: usize = 8;
+/// 同一源 IP 两次配对请求的最小间隔（防反复骚扰配对弹窗）。
+const PAIR_REQUEST_INTERVAL: Duration = Duration::from_secs(3);
 /// 发起方轮询配对结果的总时长（秒）。
 const PAIR_POLL_TIMEOUT_SECS: u64 = 150;
 /// 同一设备两次 pull 的最小间隔（mDNS 反复 Resolved 时节流）。
@@ -85,8 +92,22 @@ pub struct NearbyEntry {
 struct PendingPair {
     request: PairRequestDto,
     received_at: Instant,
+    /// 接收方临时私钥：只在内存保留到用户应答或超时，从不上线。
+    secret: [u8; 32],
+    /// 配对验证码：接收方弹窗展示，供用户与发起方屏幕上的数字人工比对。
+    sas: String,
+    /// 发起方来源 IP：轮询配对状态时用它绑定调用方，防同网段其它主机偷看结果。
+    peer_ip: Option<IpAddr>,
     /// 发起方回连地址（TCP 源 IP + 请求上报端口）；跨网段无法靠 mDNS 得到时用它。
     peer_address: Option<String>,
+}
+
+/// B 端已作出的配对决定（供 A 轮询），带过期时间与来源 IP。
+#[derive(Debug, Clone, Copy)]
+struct PairDecisionEntry {
+    decision: PairDecision,
+    at: Instant,
+    peer_ip: Option<IpAddr>,
 }
 
 /// B 端已作出的配对决定（供 A 轮询），带过期时间自动清理。
@@ -94,6 +115,23 @@ struct PendingPair {
 enum PairDecision {
     Accepted,
     Rejected,
+}
+
+/// 判断配对状态查询来源是否匹配登记时的来源 IP。
+///
+/// 登记时没有来源 IP（极端环境拿不到连接信息）时不做限制；登记了来源
+/// 但本次查询拿不到来源（不应发生）按不匹配处理，保持默认拒绝。
+fn peer_ip_matches(expected: Option<IpAddr>, actual: Option<IpAddr>) -> bool {
+    match (expected, actual) {
+        (Some(expected), Some(actual)) => expected == actual,
+        (None, _) => true,
+        (Some(_), None) => false,
+    }
+}
+
+/// 按字符边界截断字符串，避免把对端可控的超长文本带进 UI。
+fn truncate_chars(value: &str, max_chars: usize) -> String {
+    value.chars().take(max_chars).collect()
 }
 
 /// 运行中的同步实例指纹：任一字段变化即整体重启。
@@ -120,8 +158,10 @@ pub struct SyncManager {
     probe_started: AtomicBool,
     /// B 端待确认配对请求。
     pending_pairs: Mutex<HashMap<String, PendingPair>>,
-    /// B 端配对决定（device_id → 决定 + 时间）。
-    pair_decisions: Mutex<HashMap<String, (PairDecision, Instant)>>,
+    /// B 端配对决定（device_id → 决定 + 时间 + 来源 IP）。
+    pair_decisions: Mutex<HashMap<String, PairDecisionEntry>>,
+    /// 配对请求按源 IP 限速（最近一次受理时间）。
+    pair_rate: Mutex<HashMap<IpAddr, Instant>>,
     /// 每设备 pull 节流。
     pull_throttle: Mutex<HashMap<String, Instant>>,
     /// 允许对端按需拉取的文件路径 → 最近一次对外共享时间。
@@ -134,6 +174,10 @@ pub struct SyncManager {
     shutdown_tx: Mutex<Option<watch::Sender<bool>>>,
     /// mDNS daemon 句柄（发现层注册后回填，关停时统一 shutdown）。
     daemon: Mutex<Option<mdns_sd::ServiceDaemon>>,
+    /// 本机 mDNS 服务描述（发现层回填）：运行时按「允许被发现」开关动态注册 / 注销。
+    service: Mutex<Option<mdns_sd::ServiceInfo>>,
+    /// 本机服务当前是否已注册到 mDNS。
+    discoverable: AtomicBool,
 }
 
 /// 同步状态快照（`get_sync_state` 命令与 `sync://devices-updated` 事件共用）。
@@ -158,6 +202,17 @@ struct PairResultEvent {
     reason: Option<String>,
 }
 
+/// 待确认配对请求快照（配对窗口加载后主动拉取，避免事件早于页面挂载而丢失）。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PendingPairDto {
+    pub device_id: String,
+    pub name: String,
+    pub platform: String,
+    /// 6 位配对验证码。
+    pub sas: String,
+}
+
 impl SyncManager {
     /// 创建管理器并加载（或首次生成）持久设备 id。
     pub fn new(app: &AppHandle) -> Result<Self> {
@@ -171,16 +226,69 @@ impl SyncManager {
             probe_started: AtomicBool::new(false),
             pending_pairs: Mutex::new(HashMap::new()),
             pair_decisions: Mutex::new(HashMap::new()),
+            pair_rate: Mutex::new(HashMap::new()),
             pull_throttle: Mutex::new(HashMap::new()),
             shared_paths: Mutex::new(HashMap::new()),
             shutdown_tx: Mutex::new(None),
             daemon: Mutex::new(None),
+            service: Mutex::new(None),
+            discoverable: AtomicBool::new(false),
         })
     }
 
     /// 发现层回填 daemon 句柄。
     pub fn set_daemon(&self, daemon: mdns_sd::ServiceDaemon) {
         *self.daemon.lock().expect("sync poisoned") = Some(daemon);
+    }
+
+    /// 发现层回填本机服务描述（运行时注册 / 注销要用）。
+    pub fn set_service(&self, service: mdns_sd::ServiceInfo) {
+        *self.service.lock().expect("sync poisoned") = Some(service);
+    }
+
+    /// 运行时同步「允许被发现」状态：只注册 / 注销 mDNS 服务，不重启 HTTP 服务器。
+    ///
+    /// 重启服务器会重新探测端口，已配对设备记录的旧地址可能失效；
+    /// 因此这个开关必须走增量路径。
+    pub fn set_discoverable(&self, enabled: bool) {
+        if self.discoverable.load(Ordering::SeqCst) == enabled {
+            return;
+        }
+
+        let daemon_guard = self.daemon.lock().expect("sync poisoned");
+        let Some(daemon) = daemon_guard.as_ref() else {
+            return;
+        };
+        let service_guard = self.service.lock().expect("sync poisoned");
+        let Some(service) = service_guard.as_ref() else {
+            return;
+        };
+
+        // unregister 会返回注销进度通道；这里不等待回执，注销消息已进入 daemon 队列。
+        let result: std::result::Result<(), mdns_sd::Error> = if enabled {
+            daemon.register(service.clone())
+        } else {
+            daemon
+                .unregister(service.get_fullname())
+                .map(|_receiver| ())
+        };
+
+        match result {
+            Ok(()) => {
+                self.discoverable.store(enabled, Ordering::SeqCst);
+
+                if !enabled {
+                    // 关闭发现即不再受理任何配对：清空待确认队列，配对窗口拉取不到请求会自行关闭。
+                    self.pending_pairs.lock().expect("sync poisoned").clear();
+                }
+
+                log::info!(
+                    "sync discovery {}",
+                    if enabled { "enabled" } else { "disabled" }
+                );
+            }
+            Err(err) => log::warn!("sync discovery toggle failed: {err}"),
+        }
     }
 
     pub fn device_id(&self) -> &str {
@@ -238,17 +346,25 @@ impl SyncManager {
         };
         let current = self.fingerprint.read().expect("sync poisoned").clone();
         if current.as_ref() == Some(&desired) {
+            // 运行参数未变：仅增量同步「允许被发现」状态。重启服务器会重新选端口，
+            // 已配对设备记录的回连地址可能因此失效。
+            self.set_discoverable(settings.sync.discoverable);
             return;
         }
 
         self.stop(app);
-        if let Err(err) = self.start(app, &desired) {
+        if let Err(err) = self.start(app, &desired, settings.sync.discoverable) {
             log::error!("sync start failed: {err:?}");
         }
     }
 
     /// 启动 HTTP 服务器与 mDNS 发现。
-    fn start(&self, app: &AppHandle, desired: &RunningFingerprint) -> Result<()> {
+    fn start(
+        &self,
+        app: &AppHandle,
+        desired: &RunningFingerprint,
+        discoverable: bool,
+    ) -> Result<()> {
         let ctx = Arc::new(server::ServerCtx {
             app: app.clone(),
             manager: app.state::<Arc<SyncManager>>().inner().clone(),
@@ -260,9 +376,13 @@ impl SyncManager {
         let manager = app.state::<Arc<SyncManager>>().inner().clone();
         // mDNS 失败（端口被占用、系统限制本地网络权限等）不应阻断同步：
         // HTTP 服务仍可用于手动配对与已配对设备互推，只是附近列表暂不可用。
-        if let Err(err) =
-            discovery::spawn_discovery(app.clone(), manager, desired.device_name.clone(), port)
-        {
+        if let Err(err) = discovery::spawn_discovery(
+            app.clone(),
+            manager,
+            desired.device_name.clone(),
+            port,
+            discoverable,
+        ) {
             log::warn!("sync discovery start failed: {err:?}");
         }
 
@@ -312,6 +432,8 @@ impl SyncManager {
                 log::warn!("sync stop: mDNS daemon shutdown failed: {err}");
             }
         }
+        *self.service.lock().expect("sync poisoned") = None;
+        self.discoverable.store(false, Ordering::SeqCst);
         self.nearby.write().expect("sync poisoned").clear();
         self.fullname_map.write().expect("sync poisoned").clear();
         self.online.write().expect("sync poisoned").clear();
@@ -396,19 +518,70 @@ impl SyncManager {
 
     // ---- 配对状态机 ----
 
-    /// B 端受理配对请求：登记待确认并发事件给前端，返回是否受理。
+    /// 配对请求按源 IP 限速；返回 `false` 表示本次请求应直接拒绝。
+    ///
+    /// 必须由网络入口在访问数据库 / 系统钥匙串之前调用：未认证请求若先触发
+    /// 设备查询，攻击者可用高频配对请求放大资源消耗。
+    pub fn allow_pair_attempt(&self, peer_ip: Option<IpAddr>) -> bool {
+        let Some(ip) = peer_ip else {
+            return true;
+        };
+
+        let mut rate = self.pair_rate.lock().expect("sync poisoned");
+        let now = Instant::now();
+        rate.retain(|_, last| now.duration_since(*last) < PAIR_REQUEST_INTERVAL);
+        if rate.contains_key(&ip) {
+            return false;
+        }
+
+        rate.insert(ip, now);
+        true
+    }
+
+    /// B 端受理配对请求：生成临时密钥对、登记待确认并发事件给前端。
+    ///
+    /// 返回携带接收方临时公钥的受理响应时表示已受理；返回 `None` 表示拒绝
+    /// （设备 id 非法、公钥非法或与自身相同）。真正的密钥要等用户在弹窗中
+    /// 确认后才落库。
     ///
     /// `peer_ip` 是发起方连接本机时的 TCP 源地址；与请求上报的端口组合后，
     /// 接收端即可得到回连地址，跨网段手动配对也能双向推送。
+    ///
+    /// 按源 IP 的限速由网络入口（[`crate::sync::server`]）在调用本函数前完成。
     pub fn handle_pair_request(
         &self,
         app: &AppHandle,
-        request: PairRequestDto,
+        mut request: PairRequestDto,
         peer_ip: Option<IpAddr>,
-    ) -> bool {
+    ) -> Option<PairAcceptedDto> {
+        // 对端可控的展示字段先做归一化与长度收敛：超长名称会撑破固定尺寸的配对窗口。
+        request.device_id = request.device_id.trim().to_owned();
+        request.name = truncate_chars(request.name.trim(), protocol::PAIR_DEVICE_NAME_MAX_CHARS);
+        request.platform =
+            truncate_chars(request.platform.trim(), protocol::PAIR_PLATFORM_MAX_CHARS);
+
         if request.device_id == self.device_id {
-            return false;
+            return None;
         }
+
+        // 解析发起方临时公钥：非法输入直接拒绝，不进入待确认状态。
+        let peer_public = match crypto::public_key_from_hex(&request.public_key) {
+            Ok(public) => public,
+            Err(_) => return None,
+        };
+
+        // 生成接收方临时密钥对并预派生共享密钥，双方据此得到相同的 SAS。
+        let keypair = crypto::generate_pairing_keypair();
+        let key = match crypto::derive_pairing_key(
+            &keypair.secret,
+            &peer_public,
+            &self.device_id,
+            &request.device_id,
+        ) {
+            Ok(key) => key,
+            Err(_) => return None,
+        };
+        let sas = crypto::pairing_sas(&key);
 
         // 先取出事件所需字段，避免 `request` move 进 HashMap 后再借用。
         let device_id = request.device_id.clone();
@@ -426,30 +599,77 @@ impl SyncManager {
             pending.retain(|_, pair| {
                 now.duration_since(pair.received_at).as_secs() < PAIR_PENDING_TTL_SECS
             });
+
+            // 待确认请求总量上限：同设备重发允许覆盖，新设备超限直接拒绝。
+            if !pending.contains_key(&device_id) && pending.len() >= PAIR_PENDING_LIMIT {
+                return None;
+            }
+
             pending.insert(
                 device_id.clone(),
                 PendingPair {
                     request,
                     received_at: now,
+                    secret: keypair.secret,
+                    sas: sas.clone(),
+                    peer_ip,
                     peer_address,
                 },
             );
+        }
+
+        // 配对窗口独立于剪贴板面板：直接拉到桌面正中央，用户无需先打开粘贴面板。
+        if let Err(err) = crate::window::show_pair_request_window(app) {
+            log::warn!("show pair request window failed: {err:?}");
         }
 
         let event = json!({
             "deviceId": device_id,
             "name": name,
             "platform": platform,
+            "sas": sas,
         });
         if let Err(err) = app.emit(EVENT_PAIR_REQUEST, event) {
             log::warn!("emit pair request event failed: {err}");
         }
-        true
+
+        Some(PairAcceptedDto {
+            status: PairStatusDto::Pending,
+            public_key: crypto::public_key_to_hex(&keypair.public),
+        })
     }
 
     fn pending_request(&self, device_id: &str) -> Option<PendingPair> {
-        let pending = self.pending_pairs.lock().expect("sync poisoned");
+        let mut pending = self.pending_pairs.lock().expect("sync poisoned");
+        // 查询时也清理过期请求：长期没有新请求时不让过期条目滞留内存。
+        let now = Instant::now();
+        pending.retain(|_, pair| {
+            now.duration_since(pair.received_at).as_secs() < PAIR_PENDING_TTL_SECS
+        });
         pending.get(device_id).cloned()
+    }
+
+    /// 取最近一条待确认配对请求；无有效请求时返回 `None`。
+    ///
+    /// 配对窗口可能晚于事件创建，页面挂载后用它拉取当前请求；
+    /// 用户处理完一个请求后也用它判断是否还有其它设备在等待。
+    pub fn pending_pair_dto(&self) -> Option<PendingPairDto> {
+        let mut pending = self.pending_pairs.lock().expect("sync poisoned");
+        let now = Instant::now();
+        pending.retain(|_, pair| {
+            now.duration_since(pair.received_at).as_secs() < PAIR_PENDING_TTL_SECS
+        });
+
+        // FIFO：始终返回最早收到的请求。新请求不能顶替用户正在核对的弹窗内容，
+        // 否则存在「SAS 看到的是 A、点击时已换成 B」的确认竞态。
+        let (_, pair) = pending.iter().min_by_key(|(_, pair)| pair.received_at)?;
+
+        Some(PendingPairDto {
+            device_id: pair.request.device_id.clone(),
+            name: pair.request.name.clone(),
+            platform: pair.request.platform.clone(),
+            sas: pair.sas.clone(),
+        })
     }
 
     /// B 端用户应答配对；接受则派生密钥并入库，无论接受与否都记录决定供 A 轮询。
@@ -463,10 +683,14 @@ impl SyncManager {
                 "pairing request not found or expired"
             )));
         };
+        // 记录来源 IP：轮询端必须来自同一地址才能看到决定结果。
+        let pair_peer_ip = pair.peer_ip;
 
         if accept {
-            let seed = crypto::seed_from_hex(&pair.request.seed)?;
-            let key = crypto::derive_shared_key(&seed, &self.device_id, device_id);
+            // 用待确认记录里的临时私钥 + 发起方公钥完成 ECDH 派生共享密钥。
+            let peer_public = crypto::public_key_from_hex(&pair.request.public_key)?;
+            let key =
+                crypto::derive_pairing_key(&pair.secret, &peer_public, &self.device_id, device_id)?;
             // 同广播域优先用 mDNS 解析到的地址；跨网段回落到配对请求携带的回连地址。
             let address = self
                 .device_address(device_id, None)
@@ -494,29 +718,41 @@ impl SyncManager {
             let mut decisions = self.pair_decisions.lock().expect("sync poisoned");
             let now = Instant::now();
             decisions
-                .retain(|_, (_, at)| now.duration_since(*at).as_secs() < PAIR_POLL_TIMEOUT_SECS);
+                .retain(|_, entry| now.duration_since(entry.at).as_secs() < PAIR_POLL_TIMEOUT_SECS);
             let decision = if accept {
                 PairDecision::Accepted
             } else {
                 PairDecision::Rejected
             };
-            decisions.insert(device_id.to_owned(), (decision, now));
+            decisions.insert(
+                device_id.to_owned(),
+                PairDecisionEntry {
+                    decision,
+                    at: now,
+                    peer_ip: pair_peer_ip,
+                },
+            );
         }
         emit_devices_updated(app);
         Ok(())
     }
 
     /// B 端视角的配对状态（供 A 轮询）。
-    pub fn pair_status_for(&self, device_id: &str) -> PairStatusDto {
-        if let Some((decision, at)) = self
+    ///
+    /// `peer_ip` 是本次轮询的来源地址：只有与发起配对请求时相同的地址才能
+    /// 读到状态，避免同网段其它主机靠猜 device_id 探测配对结果。
+    pub fn pair_status_for(&self, device_id: &str, peer_ip: Option<IpAddr>) -> PairStatusDto {
+        if let Some(entry) = self
             .pair_decisions
             .lock()
             .expect("sync poisoned")
             .get(device_id)
             .copied()
         {
-            if at.elapsed().as_secs() < PAIR_POLL_TIMEOUT_SECS {
-                return match decision {
+            if entry.at.elapsed().as_secs() < PAIR_POLL_TIMEOUT_SECS
+                && peer_ip_matches(entry.peer_ip, peer_ip)
+            {
+                return match entry.decision {
                     PairDecision::Accepted => PairStatusDto::Accepted,
                     PairDecision::Rejected => PairStatusDto::Rejected,
                 };
@@ -524,12 +760,14 @@ impl SyncManager {
         }
 
         if let Some(pair) = self.pending_request(device_id) {
-            if pair.received_at.elapsed().as_secs() < PAIR_PENDING_TTL_SECS {
+            if pair.received_at.elapsed().as_secs() < PAIR_PENDING_TTL_SECS
+                && peer_ip_matches(pair.peer_ip, peer_ip)
+            {
                 return PairStatusDto::Pending;
             }
         }
 
-        // 无记录视为拒绝，发起方按失败处理。
+        // 无记录或来源不匹配一律视为拒绝，发起方按失败处理。
         PairStatusDto::Rejected
     }
 
@@ -541,17 +779,15 @@ impl SyncManager {
         &self,
         app: &AppHandle,
         entry: &NearbyEntry,
-        seed: &str,
+        key: &[u8; 32],
     ) -> Result<()> {
         let device_id = entry.device_id.as_str();
-        let seed_bytes = crypto::seed_from_hex(seed)?;
-        let key = crypto::derive_shared_key(&seed_bytes, &self.device_id, device_id);
         let now = chrono::Utc::now();
         let record = devices::SyncDeviceRecord {
             device_id: device_id.to_owned(),
             name: entry.name.clone(),
             platform: parse_platform_tag(&entry.platform),
-            shared_key: crypto::key_to_hex(&key),
+            shared_key: crypto::key_to_hex(key),
             allow_send: true,
             allow_receive: true,
             last_seen_at: Some(now),
@@ -870,34 +1106,17 @@ async fn resolve_incoming_files(
         return IncomingFiles::Ignore;
     }
 
-    let top_paths: Vec<&str> = dto
-        .content
-        .split('\n')
-        .filter(|path| !path.is_empty())
-        .collect();
-    let roots = group_incoming_roots(&dto.content, files);
-    if roots.is_empty() {
-        return IncomingFiles::Ignore;
+    // 接收端独立校验清单规模：超限清单只保留路径，不归组、不重建目录。
+    if file_manifest_exceeds_limits(files) {
+        return IncomingFiles::Deferred {
+            state: SyncFileState::Unavailable,
+            total_bytes: 0,
+            file_count: files.len() as i64,
+        };
     }
 
-    // 顶层路径在本机已存在且大小一致（同机复制或已拉取过）时无需任何传输。
-    // 只比存在性不够：两台机器可能有同名同路径但内容不同的文件。
-    let all_local = roots.iter().zip(&top_paths).all(|(root, path)| {
-        let Ok(meta) = std::fs::metadata(path) else {
-            return false;
-        };
-        if root.is_dir {
-            return meta.is_dir();
-        }
-        let Some(entry) = root.files.first() else {
-            return false;
-        };
-        match entry.size {
-            Some(size) => meta.is_file() && meta.len() as i64 == size,
-            None => meta.is_file(),
-        }
-    });
-    if all_local {
+    let roots = group_incoming_roots(&dto.content, files);
+    if roots.is_empty() {
         return IncomingFiles::Ignore;
     }
 
@@ -1202,6 +1421,12 @@ pub async fn pull_from_device(app: &AppHandle, device_id: &str) {
     }) else {
         return;
     };
+
+    // 「接收」权限关闭时，不再主动从该设备拉取内容。
+    if !device.allow_receive {
+        return;
+    }
+
     let Some(address) = manager.device_address(device_id, device.last_address.as_deref()) else {
         return;
     };
@@ -1234,6 +1459,17 @@ pub fn emit_pair_result(app: &AppHandle, device_id: &str, accepted: bool, reason
     }
 }
 
+/// 广播配对 SAS 验证码事件（发起端展示，接收端确认后同样展示）。
+pub fn emit_pair_sas(app: &AppHandle, device_id: &str, sas: &str) {
+    let event = json!({
+        "deviceId": device_id,
+        "sas": sas,
+    });
+    if let Err(err) = app.emit(EVENT_PAIR_SAS, event) {
+        log::warn!("emit pair sas event failed: {err}");
+    }
+}
+
 /// 探测已配对设备的可达性，并回写最近可用地址。
 ///
 /// mDNS 只在同一广播域生效；跨网段手动配对的设备靠这一步维持在线显示，
@@ -1257,7 +1493,9 @@ async fn probe_paired_devices(app: &AppHandle, manager: &Arc<SyncManager>) {
             continue;
         };
 
-        let online = client::probe_device(&address, &device.device_id).await;
+        // 用认证探测判断在线：只有持有共享密钥的真实对端才算在线，
+        // 避免同网段其它程序占用同一地址时误判。
+        let online = client::verify_peer(manager.device_id(), &device.shared_key, &address).await;
         changed |= manager.set_online(&device.device_id, online);
 
         if online {

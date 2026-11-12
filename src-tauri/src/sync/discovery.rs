@@ -17,13 +17,16 @@ use crate::sync::{NearbyEntry, SyncManager};
 /// mDNS 事件循环里两次 emit 设备列表事件的合并窗口。
 const EMIT_DEBOUNCE: Duration = Duration::from_millis(500);
 
-/// 启动发现：注册自身服务 + 监听同类服务。
-/// daemon 句柄交由 [`SyncManager`] 持有，关停时统一 shutdown。
+/// 启动发现：创建 daemon、监听同类服务，并按「允许被发现」状态决定是否注册自身服务。
+///
+/// daemon 与服务描述都交由 [`SyncManager`] 持有：运行时切换「允许被发现」时
+/// 直接注册 / 注销，无需重启整个同步服务（重启会换端口，已配对地址失效）。
 pub fn spawn_discovery(
     app: AppHandle,
     manager: Arc<SyncManager>,
     device_name: String,
     port: u16,
+    discoverable: bool,
 ) -> Result<()> {
     let device_info = manager.device_info(&app);
 
@@ -60,14 +63,7 @@ pub fn spawn_discovery(
         }
     };
 
-    if let Err(err) = daemon.register(service) {
-        // 启动失败时立即关停，避免留下无消费者的后台线程。
-        let _ = daemon.shutdown();
-        return Err(AppError::Other(anyhow::anyhow!(
-            "register mDNS service failed: {err}"
-        )));
-    }
-
+    // 先开始浏览（不依赖自身注册），失败时 daemon 尚未托管，直接关停。
     let receiver = match daemon.browse(protocol::SERVICE_TYPE) {
         Ok(receiver) => receiver,
         Err(err) => {
@@ -78,7 +74,10 @@ pub fn spawn_discovery(
         }
     };
 
+    // 不在这里直接注册：把服务描述交给 manager，由「允许被发现」状态统一注册 / 注销。
     manager.set_daemon(daemon);
+    manager.set_service(service);
+    manager.set_discoverable(discoverable);
 
     // 发现事件处理任务：recv_async 驱动，daemon shutdown 后通道关闭自然退出。
     {
@@ -99,18 +98,42 @@ pub fn spawn_discovery(
                         }
 
                         let fullname = info.get_fullname().to_owned();
-                        let is_paired = {
+                        let paired_device = {
                             let pool = app.state::<crate::db::DatabaseState>().pool().await;
                             crate::sync::devices::find_device(&pool, &entry.device_id)
                                 .await
-                                .map(|found| found.is_some())
-                                .unwrap_or(false)
+                                .ok()
+                                .flatten()
                         };
+
+                        // 已配对设备的地址可能被伪造的 mDNS 广播劫持：地址与已知值
+                        // 不一致时，先用共享密钥做认证探测，确认对端确实在新地址上。
+                        if let Some(device) = &paired_device {
+                            let known = manager
+                                .device_address(&entry.device_id, device.last_address.as_deref());
+                            if known.as_deref() != Some(entry.address.as_str()) {
+                                let verified = crate::sync::client::verify_peer(
+                                    manager.device_id(),
+                                    &device.shared_key,
+                                    &entry.address,
+                                )
+                                .await;
+
+                                if !verified {
+                                    log::warn!(
+                                        "sync discovery: {} at {} failed authenticated probe, ignored",
+                                        entry.device_id,
+                                        entry.address
+                                    );
+                                    continue;
+                                }
+                            }
+                        }
 
                         manager.update_nearby(entry.clone(), fullname);
 
                         // 已配对设备上线：更新在线信息并触发增量拉取。
-                        if is_paired {
+                        if paired_device.is_some() {
                             let pool = app.state::<crate::db::DatabaseState>().pool().await;
                             let _ = crate::sync::devices::touch_device(
                                 &pool,

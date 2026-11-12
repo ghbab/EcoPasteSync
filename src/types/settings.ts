@@ -198,6 +198,8 @@ export interface Sync {
   enabled: boolean;
   deviceName: string;
   port: number;
+  /** 是否允许被局域网内其它设备发现；关闭后不接受新的配对请求，已配对同步不受影响。 */
+  discoverable: boolean;
   syncText: boolean;
   syncImage: boolean;
   syncFiles: boolean;

@@ -2,6 +2,7 @@ import { createHashRouter } from "react-router";
 import Clipboard from "@/pages/Clipboard";
 import ContextMenu, { ContextSubmenu } from "@/pages/ContextMenu";
 import Onboarding from "@/pages/Onboarding";
+import PairRequest from "@/pages/PairRequest";
 import Preference from "@/pages/Preference";
 import Preview from "@/pages/Preview";
 
@@ -29,5 +30,9 @@ export const router = createHashRouter([
   {
     Component: Preview,
     path: "/preview",
+  },
+  {
+    Component: PairRequest,
+    path: "/pair-request",
   },
 ]);

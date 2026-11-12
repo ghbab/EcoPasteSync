@@ -19,6 +19,10 @@ export const WINDOW_LABEL = {
    */
   ONBOARDING: "onboarding",
   /**
+   * 局域网同步配对请求窗口（桌面居中置顶）。
+   */
+  PAIR_REQUEST: "pair-request",
+  /**
    * 偏好设置窗口。
    */
   PREFERENCE: "preference",

@@ -837,6 +837,19 @@ export const preferenceTabs: PreferenceTab[] = [
             },
           },
           {
+            control: { type: "switch" },
+            disabledWhen: (settings) => {
+              return !settings.sync.enabled;
+            },
+            id: "sync.discoverable",
+            keywords: ["sync", "discover", "nearby", "mdns", "visible", "pair"],
+            parentId: "sync.enabled",
+            path: ["sync", "discoverable"],
+            value: (settings) => {
+              return settings.sync.discoverable;
+            },
+          },
+          {
             control: { type: "text" },
             disabledWhen: (settings) => {
               return !settings.sync.enabled;

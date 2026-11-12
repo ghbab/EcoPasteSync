@@ -24,6 +24,7 @@ pub const CLIPBOARD_WINDOW_LABEL: &str = "clipboard";
 pub const PREFERENCE_WINDOW_LABEL: &str = "preference";
 pub const CLIPBOARD_PREVIEW_WINDOW_LABEL: &str = "clipboard-preview";
 pub const ONBOARDING_WINDOW_LABEL: &str = "onboarding";
+pub const PAIR_REQUEST_WINDOW_LABEL: &str = "pair-request";
 
 /// 偏好页定位高亮事件。前端收到后切到目标设置项所在分类并滚动高亮。
 const PREFERENCE_HIGHLIGHT_EVENT: &str = "preference://highlight-setting";
@@ -121,9 +122,10 @@ pub fn show_window(app_handle: &AppHandle, label: &str) -> Result<()> {
         if let Err(err) = apply_clipboard_window_layout(app_handle) {
             log::warn!("apply clipboard window layout failed: {err}");
         }
-    } else if label == ONBOARDING_WINDOW_LABEL {
+    } else if label == ONBOARDING_WINDOW_LABEL || label == PAIR_REQUEST_WINDOW_LABEL {
+        // 引导与配对请求都是居中弹出的临时窗口：每次显示都重新居中，不恢复上次位置。
         if let Err(err) = position_window(app_handle, label, WindowPosition::Center) {
-            log::warn!("center onboarding window failed: {err}");
+            log::warn!("center {label} window failed: {err}");
         }
     } else {
         let visible = get_window(app_handle, label)?.is_visible().unwrap_or(false);
@@ -329,6 +331,53 @@ pub fn build_onboarding_window(app_handle: &AppHandle) -> Result<()> {
     .map_err(|err| anyhow::anyhow!("build onboarding window: {err}"))?;
 
     Ok(())
+}
+
+/// 按需创建配对请求窗口。无边框 + 透明，由前端自绘卡片；始终置顶、不抢任务栏。
+pub fn build_pair_request_window(app_handle: &AppHandle) -> Result<()> {
+    if app_handle
+        .get_webview_window(PAIR_REQUEST_WINDOW_LABEL)
+        .is_some()
+    {
+        return Ok(());
+    }
+
+    WebviewWindowBuilder::new(
+        app_handle,
+        PAIR_REQUEST_WINDOW_LABEL,
+        WebviewUrl::App("index.html/#/pair-request".into()),
+    )
+    .title("EcoPasteSync Pairing")
+    .inner_size(420.0, 320.0)
+    .center()
+    .resizable(false)
+    .maximizable(false)
+    .minimizable(false)
+    .decorations(false)
+    .transparent(true)
+    .always_on_top(true)
+    .skip_taskbar(true)
+    .accept_first_mouse(true)
+    .disable_drag_drop_handler()
+    .visible(false)
+    .build()
+    .map_err(|err| anyhow::anyhow!("build pair request window: {err}"))?;
+
+    Ok(())
+}
+
+/// 显示配对请求窗口：不存在时重建，显示时始终居中置顶。
+///
+/// 窗口已可见说明用户正在处理当前请求：只更新内容，不重复置顶抢焦点，
+/// 避免连续请求反复打断用户操作。
+pub fn show_pair_request_window(app_handle: &AppHandle) -> Result<()> {
+    if let Some(window) = app_handle.get_webview_window(PAIR_REQUEST_WINDOW_LABEL) {
+        if window.is_visible().unwrap_or(false) {
+            return Ok(());
+        }
+    }
+
+    show_window(app_handle, PAIR_REQUEST_WINDOW_LABEL)
 }
 
 /// 创建并显示首次启动引导窗口。

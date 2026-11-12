@@ -11,11 +11,12 @@ use crate::core::{AppError, Result};
 use crate::sync::crypto;
 use crate::sync::devices::{self, SyncDeviceRecord};
 use crate::sync::protocol::{
-    file_chunk_signature_target, DeviceInfoDto, NearbyDeviceDto, PairRequestDto, PairStatusDto,
-    SyncClipboardItemDto, API_CLIPBOARD_PULL, API_CLIPBOARD_PUSH, API_FILE_CHUNK, API_IMAGE,
-    API_INFO, API_PAIR, API_PAIR_STATUS, HEADER_DEVICE_ID, HEADER_SIGNATURE, HEADER_TIMESTAMP,
+    file_chunk_signature_target, pull_signature_target, DeviceInfoDto, NearbyDeviceDto,
+    PairAcceptedDto, PairRequestDto, PairStatusDto, SyncClipboardItemDto, API_CLIPBOARD_PULL,
+    API_CLIPBOARD_PUSH, API_FILE_CHUNK, API_IMAGE, API_INFO, API_PAIR, API_PAIR_STATUS, API_VERIFY,
+    HEADER_DEVICE_ID, HEADER_SIGNATURE, HEADER_TIMESTAMP,
 };
-use crate::sync::{emit_pair_result, NearbyEntry, SyncManager};
+use crate::sync::{emit_pair_result, emit_pair_sas, NearbyEntry, SyncManager};
 
 /// 单次 HTTP 请求超时：推送大文本（可达数 MB）需要宽松上限。
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
@@ -28,6 +29,8 @@ const PAIR_POLL_INTERVAL: Duration = Duration::from_secs(2);
 fn client() -> Result<Client> {
     Client::builder()
         .timeout(REQUEST_TIMEOUT)
+        // 不跟随重定向：避免对端用 3xx 把带签名的认证头转发到其它地址。
+        .redirect(reqwest::redirect::Policy::none())
         .build()
         .map_err(|err| AppError::Other(anyhow::anyhow!("build sync http client failed: {err}")))
 }
@@ -56,7 +59,8 @@ pub fn start_pairing_with_entry(
     tauri::async_runtime::spawn(async move {
         let device_id = entry.device_id.clone();
         let info = manager.device_info(&app);
-        let seed = crypto::generate_pairing_seed();
+        // 生成发起方临时密钥对：私钥只留在内存，公钥随请求明文发给接收方。
+        let keypair = crypto::generate_pairing_keypair();
         // 本机服务端口：对端用它配合 TCP 源 IP 得到回连地址（跨网段也能双向同步）。
         let port = manager.running_port().unwrap_or_else(|| {
             app.state::<crate::settings::SettingsStore>()
@@ -68,7 +72,7 @@ pub fn start_pairing_with_entry(
             device_id: info.device_id,
             name: info.name,
             platform: info.platform,
-            seed: seed.clone(),
+            public_key: crypto::public_key_to_hex(&keypair.public),
             port: Some(port),
         };
 
@@ -91,8 +95,54 @@ pub fn start_pairing_with_entry(
 
         match sent {
             Ok(resp) if resp.status().as_u16() == 202 => {
-                // 受理成功，进入轮询。
-                poll_pair_result(app, manager, client, entry, &seed).await;
+                // 受理成功：用响应里的接收方临时公钥完成 ECDH 派生共享密钥。
+                let accepted = match resp.json::<PairAcceptedDto>().await {
+                    Ok(accepted) => accepted,
+                    Err(err) => {
+                        log::warn!("sync pair: decode accepted response failed: {err}");
+                        emit_pair_result(
+                            &app,
+                            &device_id,
+                            false,
+                            Some("internal-error".to_owned()),
+                        );
+                        return;
+                    }
+                };
+                let peer_public = match crypto::public_key_from_hex(&accepted.public_key) {
+                    Ok(public) => public,
+                    Err(err) => {
+                        log::warn!("sync pair: invalid peer public key: {err}");
+                        emit_pair_result(
+                            &app,
+                            &device_id,
+                            false,
+                            Some("internal-error".to_owned()),
+                        );
+                        return;
+                    }
+                };
+                let key = match crypto::derive_pairing_key(
+                    &keypair.secret,
+                    &peer_public,
+                    manager.device_id(),
+                    &device_id,
+                ) {
+                    Ok(key) => key,
+                    Err(err) => {
+                        log::warn!("sync pair: derive shared key failed: {err}");
+                        emit_pair_result(
+                            &app,
+                            &device_id,
+                            false,
+                            Some("internal-error".to_owned()),
+                        );
+                        return;
+                    }
+                };
+                // 展示 SAS：与接收端弹窗里的数字一致，才说明配对未被中间人劫持。
+                emit_pair_sas(&app, &device_id, &crypto::pairing_sas(&key));
+                poll_pair_result(app, manager, client, entry, key).await;
             }
             Ok(resp) => {
                 log::warn!("sync pair: unexpected status {} from {url}", resp.status());
@@ -236,7 +286,7 @@ async fn poll_pair_result(
     manager: std::sync::Arc<SyncManager>,
     client: Client,
     entry: NearbyEntry,
-    seed: &str,
+    key: [u8; 32],
 ) {
     let device_id = entry.device_id.clone();
     let url = format!(
@@ -277,7 +327,7 @@ async fn poll_pair_result(
                 continue;
             }
             PairStatusDto::Accepted => {
-                if let Err(err) = manager.save_paired_device(&app, &entry, seed).await {
+                if let Err(err) = manager.save_paired_device(&app, &entry, &key).await {
                     log::warn!("sync pair: save paired device failed: {err}");
                     emit_pair_result(&app, &device_id, false, Some("internal-error".to_owned()));
                     return;
@@ -431,17 +481,21 @@ pub async fn pull_items(app: &AppHandle, device: &SyncDeviceRecord, address: &st
     let manager = app.state::<std::sync::Arc<SyncManager>>();
     let self_id = manager.device_id().to_owned();
 
-    let mut url = format!("http://{address}{API_CLIPBOARD_PULL}");
-    if let Some(since) = device.last_pull_at {
-        url.push_str(&format!("?since={}", since.to_rfc3339()));
+    let since_raw = device.last_pull_at.map(|since| since.to_rfc3339());
+    let mut url = reqwest::Url::parse(&format!("http://{address}{API_CLIPBOARD_PULL}"))
+        .map_err(|err| AppError::Other(anyhow::anyhow!("invalid sync pull url: {err}")))?;
+    if let Some(since) = &since_raw {
+        // 用 URL 查询参数编码：避免 RFC3339 里的 `+` 在服务端被解码成空格。
+        url.query_pairs_mut().append_pair("since", since);
     }
 
     let timestamp = now_unix();
-    let signature = crypto::sign_request(&key, &self_id, timestamp, API_CLIPBOARD_PULL);
+    let signature_target = pull_signature_target(since_raw.as_deref());
+    let signature = crypto::sign_request(&key, &self_id, timestamp, &signature_target);
 
     let client = client()?;
     let resp = client
-        .get(&url)
+        .get(url.clone())
         .header(HEADER_DEVICE_ID, &self_id)
         .header(HEADER_TIMESTAMP, timestamp.to_string())
         .header(HEADER_SIGNATURE, &signature)
@@ -490,27 +544,33 @@ pub async fn pull_items(app: &AppHandle, device: &SyncDeviceRecord, address: &st
     Ok(())
 }
 
-/// 轻量可达性探测：`/api/info` 返回且设备 id 匹配才算在线。
+/// 认证探测：向目标地址发送带共享密钥签名的 `/api/verify`。
 ///
-/// 校验设备 id 是为了避免该地址被其它程序占用时误判在线。
-pub async fn probe_device(address: &str, expected_device_id: &str) -> bool {
+/// 只有持有该密钥的真实对端才能通过认证，用于确认 mDNS 上报的新地址
+/// 不是冒充已配对设备的其它主机；同时用作已配对设备的在线探测。
+/// `self_device_id` 必须是本机设备 id：服务端按请求头上的设备 id 查找密钥。
+pub async fn verify_peer(self_device_id: &str, shared_key_hex: &str, address: &str) -> bool {
+    let Ok(key) = crypto::key_from_hex(shared_key_hex) else {
+        return false;
+    };
     let Ok(client) = client() else {
         return false;
     };
 
-    let url = format!("http://{address}{API_INFO}");
+    let timestamp = now_unix();
+    let signature = crypto::sign_request(&key, self_device_id, timestamp, API_VERIFY);
+    let url = format!("http://{address}{API_VERIFY}");
     let result = client
         .get(&url)
-        .timeout(Duration::from_secs(2))
+        .timeout(Duration::from_secs(3))
+        .header(HEADER_DEVICE_ID, self_device_id)
+        .header(HEADER_TIMESTAMP, timestamp.to_string())
+        .header(HEADER_SIGNATURE, &signature)
         .send()
         .await;
-    let resp = match result {
-        Ok(resp) if resp.status().is_success() => resp,
-        _ => return false,
-    };
 
-    match resp.json::<DeviceInfoDto>().await {
-        Ok(info) => info.device_id == expected_device_id,
+    match result {
+        Ok(resp) => resp.status().is_success(),
         Err(_) => false,
     }
 }
@@ -525,6 +585,13 @@ pub async fn fetch_device_info(address: &str) -> Result<DeviceInfoDto> {
         .send()
         .await
         .map_err(|err| AppError::Other(anyhow::anyhow!("get {url} failed: {err}")))?;
+
+    if resp.status() == reqwest::StatusCode::NOT_FOUND {
+        // 对端关闭「允许被发现」后不再响应主动探测。
+        return Err(AppError::Other(anyhow::anyhow!(
+            "the device does not allow discovery"
+        )));
+    }
 
     if !resp.status().is_success() {
         return Err(AppError::Other(anyhow::anyhow!(

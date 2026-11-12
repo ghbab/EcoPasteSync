@@ -22,10 +22,10 @@ use crate::core::Result;
 use crate::sync::crypto;
 use crate::sync::devices::{self, SyncDeviceRecord};
 use crate::sync::protocol::{
-    file_chunk_signature_target, PairRequestDto, PairStatusDto, SyncClipboardItemDto,
+    file_chunk_signature_target, pull_signature_target, PairRequestDto, SyncClipboardItemDto,
     API_CLIPBOARD_PULL, API_CLIPBOARD_PUSH, API_FILE_CHUNK, API_IMAGE, API_INFO, API_PAIR,
-    API_PAIR_STATUS, FILE_CHUNK_SIZE, HEADER_DEVICE_ID, HEADER_SIGNATURE, HEADER_TIMESTAMP,
-    PULL_PAGE_LIMIT,
+    API_PAIR_STATUS, API_VERIFY, FILE_CHUNK_SIZE, HEADER_DEVICE_ID, HEADER_SIGNATURE,
+    HEADER_TIMESTAMP, PAIR_DEVICE_ID_MAX_CHARS, PULL_PAGE_LIMIT,
 };
 use crate::sync::{collect_shared_paths, item_to_dto, SyncManager};
 
@@ -100,6 +100,7 @@ fn build_router(ctx: Arc<ServerCtx>) -> Router {
         .route(API_INFO, get(handle_info))
         .route(API_PAIR, post(handle_pair))
         .route(API_PAIR_STATUS, get(handle_pair_status))
+        .route(API_VERIFY, get(handle_verify))
         .route(API_CLIPBOARD_PUSH, post(handle_push))
         .route(API_CLIPBOARD_PULL, get(handle_pull))
         .route(&format!("{API_IMAGE}/{{file}}"), get(handle_image))
@@ -209,17 +210,49 @@ fn sealed_bytes_response(key: &[u8; 32], plain: &[u8]) -> Response {
 
 // ---- 明文端点 ----
 
-async fn handle_info(State(ctx): State<Arc<ServerCtx>>) -> Json<crate::sync::DeviceInfoDto> {
-    Json(ctx.manager.device_info(&ctx.app))
+/// 读取「允许被发现」设置：false 时不响应主动探测、不接受新的配对请求。
+fn sync_discoverable(app: &AppHandle) -> bool {
+    app.state::<crate::settings::SettingsStore>()
+        .snapshot()
+        .sync
+        .discoverable
+}
+
+/// 设备信息：手动配对前探测用。
+///
+/// 关闭「允许被发现」后按不存在处理，避免未开放配对的设备仍能被主动探测到。
+async fn handle_info(State(ctx): State<Arc<ServerCtx>>) -> Response {
+    if !sync_discoverable(&ctx.app) {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+
+    Json(ctx.manager.device_info(&ctx.app)).into_response()
 }
 
 async fn handle_pair(
     State(ctx): State<Arc<ServerCtx>>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
-    Json(request): Json<PairRequestDto>,
+    Json(mut request): Json<PairRequestDto>,
 ) -> Response {
-    // 空字段防御：device_id / seed 是后续派生密钥的关键输入。
-    if request.device_id.trim().is_empty() || request.seed.len() != 64 {
+    // 「允许被发现」关闭时拒绝一切新的配对请求；已配对设备使用加密端点，不受影响。
+    if !sync_discoverable(&ctx.app) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+
+    // 限速必须早于任何数据库 / 钥匙串访问：未认证请求不能放大资源消耗。
+    if !ctx.manager.allow_pair_attempt(Some(peer.ip())) {
+        return StatusCode::TOO_MANY_REQUESTS.into_response();
+    }
+
+    // 先归一化设备 id：黑名单 / 已配对查询与后续 pending 必须使用同一个值，
+    // 否则带前后空白的 id 可以绕过黑名单。
+    request.device_id = request.device_id.trim().to_owned();
+
+    // 空字段与长度防御：device_id / public_key 是后续派生密钥的关键输入。
+    if request.device_id.is_empty()
+        || request.device_id.chars().count() > PAIR_DEVICE_ID_MAX_CHARS
+        || request.public_key.len() != 64
+    {
         return StatusCode::BAD_REQUEST.into_response();
     }
 
@@ -230,28 +263,48 @@ async fn handle_pair(
         Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     }
 
-    if ctx
+    // 已配对设备不允许再次配对：否则任何能访问本端口的一方都能覆盖现有共享密钥。
+    match devices::find_device(&pool, &request.device_id).await {
+        Ok(Some(_)) => return StatusCode::CONFLICT.into_response(),
+        Ok(None) => {}
+        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    }
+
+    match ctx
         .manager
         .handle_pair_request(&ctx.app, request, Some(peer.ip()))
     {
-        (StatusCode::ACCEPTED, Json(PairStatusDto::Pending)).into_response()
-    } else {
-        StatusCode::CONFLICT.into_response()
+        Some(accepted) => (StatusCode::ACCEPTED, Json(accepted)).into_response(),
+        None => StatusCode::CONFLICT.into_response(),
     }
 }
 
 async fn handle_pair_status(
     State(ctx): State<Arc<ServerCtx>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
     Query(params): Query<std::collections::HashMap<String, String>>,
 ) -> Response {
     let Some(device_id) = params.get("deviceId") else {
         return StatusCode::BAD_REQUEST.into_response();
     };
 
-    Json(ctx.manager.pair_status_for(device_id)).into_response()
+    Json(ctx.manager.pair_status_for(device_id, Some(peer.ip()))).into_response()
 }
 
 // ---- 加密端点 ----
+
+/// 认证探测：只验证调用方持有共享密钥。
+///
+/// 发现层在已配对设备的 mDNS 地址变化时先调用它，确认新地址不是冒充设备；
+/// 也用于已配对设备的在线探测。
+async fn handle_verify(State(ctx): State<Arc<ServerCtx>>, headers: HeaderMap) -> Response {
+    let (_, key) = match verify_auth(&ctx, &headers, API_VERIFY).await {
+        Ok(pair) => pair,
+        Err(status) => return status.into_response(),
+    };
+
+    sealed_response(&key, &json!({ "ok": true }))
+}
 
 async fn handle_push(
     State(ctx): State<Arc<ServerCtx>>,
@@ -285,12 +338,20 @@ async fn handle_pull(
     headers: HeaderMap,
     Query(params): Query<std::collections::HashMap<String, String>>,
 ) -> Response {
-    let (device, key) = match verify_auth(&ctx, &headers, API_CLIPBOARD_PULL).await {
+    // 先取原始 since 字符串参与签名校验：认证头与游标绑定，不能改游标复用签名。
+    let since_raw = params.get("since").cloned();
+    let signature_target = pull_signature_target(since_raw.as_deref());
+    let (device, key) = match verify_auth(&ctx, &headers, &signature_target).await {
         Ok(pair) => pair,
         Err(status) => return status.into_response(),
     };
 
-    let since = params.get("since").and_then(|raw| {
+    // 「发送」权限关闭后，该设备不能再从本机拉取任何条目。
+    if !device.allow_send {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+
+    let since = since_raw.as_deref().and_then(|raw| {
         chrono::DateTime::parse_from_rfc3339(raw)
             .map(|ts| ts.with_timezone(&chrono::Utc))
             .ok()
@@ -327,7 +388,6 @@ async fn handle_pull(
     }
     ctx.manager.remember_shared_paths(&shared_paths);
 
-    let _ = device;
     sealed_response(&key, &dtos)
 }
 
@@ -349,7 +409,11 @@ async fn handle_image(
         Ok(pair) => pair,
         Err(status) => return status.into_response(),
     };
-    let _ = device;
+
+    // 「发送」权限关闭后，该设备不能再从本机拉取图片原图。
+    if !device.allow_send {
+        return StatusCode::FORBIDDEN.into_response();
+    }
 
     let store = ctx
         .app
@@ -412,7 +476,11 @@ async fn handle_file_chunk(
         Ok(pair) => pair,
         Err(status) => return status.into_response(),
     };
-    let _ = device;
+
+    // 「发送」权限关闭后，该设备不能再从本机拉取文件块。
+    if !device.allow_send {
+        return StatusCode::FORBIDDEN.into_response();
+    }
 
     // 只允许拉取本机主动共享过的路径：同步入库的远端路径不在授权表里，
     // 已配对设备无法借这个接口读取本机任意文件。
