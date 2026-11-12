@@ -182,7 +182,14 @@ pub async fn pull_files(
                 let Some(rel_path) = child.rel_path.as_deref() else {
                     continue;
                 };
-                let Some(relative) = rel_mapper.map(rel_path) else {
+                // 目录条目与文件条目分开映射：目录走幂等的目录缓存，
+                // 避免同一目录在清单里多次出现时被改名。
+                let mapped = if child.is_dir {
+                    rel_mapper.map_dir(rel_path)
+                } else {
+                    rel_mapper.map(rel_path)
+                };
+                let Some(relative) = mapped else {
                     discard(&root).await;
                     return Err(AppError::Other(anyhow::anyhow!(
                         "invalid relative path from remote: {rel_path}"
@@ -496,7 +503,14 @@ async fn discard(root: &Path) {
 /// 每段都经 [`sanitize_file_name`] 清洗；同一父目录下清洗结果冲突时追加序号，
 /// 避免不同远端路径映射到同一本地路径互相覆盖。只接受相对路径：空段、
 /// `.`、`..` 与绝对路径一律拒绝，防止写出缓存目录。
+///
+/// 目录路径单独缓存：清单里多个文件共享同一父目录是常态，重复出现必须复用
+/// 首次分配的名称，否则会凭空多出 `docs (2)` 这类目录。
 struct RelPathMapper {
+    /// 远端目录相对路径（保留原始大小写）→ 本地相对路径。
+    dirs: HashMap<String, PathBuf>,
+    /// 远端文件相对路径（保留原始大小写）→ 本地相对路径。
+    files: HashMap<String, PathBuf>,
     /// 父目录（本地相对路径的小写文本）→ 该目录下已用的小写名称。
     used: HashMap<String, HashSet<String>>,
 }
@@ -504,32 +518,87 @@ struct RelPathMapper {
 impl RelPathMapper {
     fn new() -> Self {
         Self {
+            dirs: HashMap::new(),
+            files: HashMap::new(),
             used: HashMap::new(),
         }
     }
 
-    /// 返回本地相对路径；遇到非法段时返回 `None`。
+    /// 映射文件路径，返回缓存内的本地相对路径；遇到非法段时返回 `None`。
     fn map(&mut self, rel_path: &str) -> Option<PathBuf> {
-        let mut local = PathBuf::new();
+        // 同一远端文件重复出现时复用首次结果，避免同一份内容落成两个文件。
+        if let Some(cached) = self.files.get(rel_path) {
+            return Some(cached.clone());
+        }
+        if rel_path.is_empty() || rel_path.starts_with('/') {
+            return None;
+        }
 
-        for part in rel_path.split('/') {
+        let (rel_dir, file_name) = match rel_path.rsplit_once('/') {
+            Some((dir, name)) => (dir, name),
+            None => ("", rel_path),
+        };
+        if file_name.is_empty() || file_name == "." || file_name == ".." {
+            return None;
+        }
+
+        let mut local = self.map_dirs(rel_dir)?;
+        let base = sanitize_file_name(file_name);
+        if base.is_empty() {
+            return None;
+        }
+
+        // 以父目录的本地相对路径作为作用域，不同目录下允许同名。
+        let scope = local.to_string_lossy().to_lowercase();
+        let used = self.used.entry(scope).or_default();
+        let name = unique_in_scope(&base, used);
+        local.push(name);
+
+        self.files.insert(rel_path.to_owned(), local.clone());
+        Some(local)
+    }
+
+    /// 映射目录路径（清单里的目录条目，含空目录）；重复调用返回同一结果。
+    fn map_dir(&mut self, rel_path: &str) -> Option<PathBuf> {
+        if rel_path.is_empty() || rel_path.starts_with('/') {
+            return None;
+        }
+        self.map_dirs(rel_path)
+    }
+
+    /// 逐段映射目录链，并把「远端目录 → 本地目录」写入缓存。
+    fn map_dirs(&mut self, rel_dir: &str) -> Option<PathBuf> {
+        let mut local = PathBuf::new();
+        if rel_dir.is_empty() {
+            return Some(local);
+        }
+
+        // remote 用原始文本累积，保证远端 `docs` 与 `Docs` 仍按两个目录处理，
+        // 在本地（大小写不敏感）冲突时由 unique_in_scope 追加序号。
+        let mut remote = String::new();
+        for part in rel_dir.split('/') {
             if part.is_empty() || part == "." || part == ".." {
                 return None;
             }
+            if !remote.is_empty() {
+                remote.push('/');
+            }
+            remote.push_str(part);
+
+            if let Some(cached) = self.dirs.get(&remote) {
+                local = cached.clone();
+                continue;
+            }
+
             let base = sanitize_file_name(part);
             if base.is_empty() {
                 return None;
             }
-
-            // 以父目录的本地相对路径作为作用域，不同目录下允许同名。
             let scope = local.to_string_lossy().to_lowercase();
             let used = self.used.entry(scope).or_default();
             let name = unique_in_scope(&base, used);
             local.push(name);
-        }
-
-        if local.as_os_str().is_empty() {
-            return None;
+            self.dirs.insert(remote.clone(), local.clone());
         }
 
         Some(local)
@@ -712,6 +781,30 @@ mod tests {
         assert_eq!(mapper.map("/etc/passwd"), None);
         assert_eq!(mapper.map("docs//a.txt"), None);
         assert_eq!(mapper.map(""), None);
+    }
+
+    #[test]
+    fn rel_path_mapper_reuses_directory_names() {
+        let mut mapper = RelPathMapper::new();
+
+        // 同一目录在清单里多次出现（文件条目 + 目录条目）必须复用同一本地路径。
+        assert_eq!(
+            mapper.map("docs/2024/a.txt"),
+            Some(PathBuf::from("docs/2024/a.txt"))
+        );
+        assert_eq!(
+            mapper.map_dir("docs/2024"),
+            Some(PathBuf::from("docs/2024"))
+        );
+        // 远端不同的目录清洗后同名时仍要独立分配，不能合并成一个目录。
+        assert_eq!(
+            mapper.map("do:cs/b.txt"),
+            Some(PathBuf::from("do_cs/b.txt"))
+        );
+        assert_eq!(
+            mapper.map("do?cs/c.txt"),
+            Some(PathBuf::from("do_cs (2)/c.txt"))
+        );
     }
 
     #[test]
