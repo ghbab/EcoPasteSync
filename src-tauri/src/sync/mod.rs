@@ -22,7 +22,9 @@ mod file_transfer;
 mod protocol;
 mod server;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::net::{IpAddr, SocketAddr};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
@@ -51,6 +53,8 @@ const PAIR_PENDING_TTL_SECS: u64 = 120;
 const PAIR_POLL_TIMEOUT_SECS: u64 = 150;
 /// 同一设备两次 pull 的最小间隔（mDNS 反复 Resolved 时节流）。
 const PULL_THROTTLE: Duration = Duration::from_secs(30);
+/// 已配对设备可达性探测间隔。
+const PROBE_INTERVAL: Duration = Duration::from_secs(30);
 /// 同步 identity 文件名（config 目录下）。
 const IDENTITY_FILE: &str = "sync-identity.json";
 /// 文件指纹只读头部这么多字节：足以发现文件被替换 / 截断，成本与文件大小无关。
@@ -76,6 +80,8 @@ pub struct NearbyEntry {
 struct PendingPair {
     request: PairRequestDto,
     received_at: Instant,
+    /// 发起方回连地址（TCP 源 IP + 请求上报端口）；跨网段无法靠 mDNS 得到时用它。
+    peer_address: Option<String>,
 }
 
 /// B 端已作出的配对决定（供 A 轮询），带过期时间自动清理。
@@ -103,6 +109,10 @@ pub struct SyncManager {
     nearby: RwLock<HashMap<String, NearbyEntry>>,
     /// mDNS fullname → device_id（ServiceRemoved 事件只带 fullname）。
     fullname_map: RwLock<HashMap<String, String>>,
+    /// 可达性探测结果为在线的已配对设备（mDNS 发现不到时仍能标记在线）。
+    online: RwLock<HashSet<String>>,
+    /// 在线探测任务是否已启动（只启动一次，避免同步重启产生多个循环）。
+    probe_started: AtomicBool,
     /// B 端待确认配对请求。
     pending_pairs: Mutex<HashMap<String, PendingPair>>,
     /// B 端配对决定（device_id → 决定 + 时间）。
@@ -152,6 +162,8 @@ impl SyncManager {
             device_id,
             nearby: RwLock::new(HashMap::new()),
             fullname_map: RwLock::new(HashMap::new()),
+            online: RwLock::new(HashSet::new()),
+            probe_started: AtomicBool::new(false),
             pending_pairs: Mutex::new(HashMap::new()),
             pair_decisions: Mutex::new(HashMap::new()),
             pull_throttle: Mutex::new(HashMap::new()),
@@ -251,8 +263,28 @@ impl SyncManager {
 
         *self.fingerprint.write().expect("sync poisoned") = Some(desired.clone());
         log::info!("sync started on port {port} as {}", self.device_id);
+        self.ensure_health_probe(app);
         emit_devices_updated(app);
         Ok(())
+    }
+
+    /// 启动已配对设备可达性探测任务；进程内只启动一次。
+    fn ensure_health_probe(&self, app: &AppHandle) {
+        if self.probe_started.swap(true, Ordering::SeqCst) {
+            return;
+        }
+
+        let app = app.clone();
+        let manager = app.state::<Arc<SyncManager>>().inner().clone();
+        tauri::async_runtime::spawn(async move {
+            loop {
+                tokio::time::sleep(PROBE_INTERVAL).await;
+                if !manager.is_running() {
+                    continue;
+                }
+                probe_paired_devices(&app, &manager).await;
+            }
+        });
     }
 
     /// 关停服务器与发现，清空附近缓存。
@@ -277,6 +309,7 @@ impl SyncManager {
         }
         self.nearby.write().expect("sync poisoned").clear();
         self.fullname_map.write().expect("sync poisoned").clear();
+        self.online.write().expect("sync poisoned").clear();
         self.pending_pairs.lock().expect("sync poisoned").clear();
         log::info!("sync stopped");
         emit_devices_updated(app);
@@ -359,7 +392,15 @@ impl SyncManager {
     // ---- 配对状态机 ----
 
     /// B 端受理配对请求：登记待确认并发事件给前端，返回是否受理。
-    pub fn handle_pair_request(&self, app: &AppHandle, request: PairRequestDto) -> bool {
+    ///
+    /// `peer_ip` 是发起方连接本机时的 TCP 源地址；与请求上报的端口组合后，
+    /// 接收端即可得到回连地址，跨网段手动配对也能双向推送。
+    pub fn handle_pair_request(
+        &self,
+        app: &AppHandle,
+        request: PairRequestDto,
+        peer_ip: Option<IpAddr>,
+    ) -> bool {
         if request.device_id == self.device_id {
             return false;
         }
@@ -368,6 +409,10 @@ impl SyncManager {
         let device_id = request.device_id.clone();
         let name = request.name.clone();
         let platform = request.platform.clone();
+        let peer_address = match (peer_ip, request.port) {
+            (Some(ip), Some(port)) if port != 0 => Some(SocketAddr::new(ip, port).to_string()),
+            _ => None,
+        };
 
         {
             let mut pending = self.pending_pairs.lock().expect("sync poisoned");
@@ -381,6 +426,7 @@ impl SyncManager {
                 PendingPair {
                     request,
                     received_at: now,
+                    peer_address,
                 },
             );
         }
@@ -416,7 +462,10 @@ impl SyncManager {
         if accept {
             let seed = crypto::seed_from_hex(&pair.request.seed)?;
             let key = crypto::derive_shared_key(&seed, &self.device_id, device_id);
-            let address = self.device_address(device_id, None);
+            // 同广播域优先用 mDNS 解析到的地址；跨网段回落到配对请求携带的回连地址。
+            let address = self
+                .device_address(device_id, None)
+                .or_else(|| pair.peer_address.clone());
             let now = chrono::Utc::now();
             let record = devices::SyncDeviceRecord {
                 device_id: device_id.to_owned(),
@@ -432,6 +481,8 @@ impl SyncManager {
             };
             let pool = devices::pool(app).await;
             devices::upsert_device(&pool, &record).await?;
+            // 配对请求刚到达，对端必然在线。
+            self.set_online(device_id, true);
         }
 
         {
@@ -505,8 +556,39 @@ impl SyncManager {
         };
         let pool = devices::pool(app).await;
         devices::upsert_device(&pool, &record).await?;
+        // 轮询刚拿到对端确认，对端在线。
+        self.set_online(device_id, true);
         emit_devices_updated(app);
         Ok(())
+    }
+
+    /// 更新已配对设备的可达状态，返回状态是否发生变化。
+    fn set_online(&self, device_id: &str, online: bool) -> bool {
+        let mut known = self.online.write().expect("sync poisoned");
+        if online {
+            known.insert(device_id.to_owned())
+        } else {
+            known.remove(device_id)
+        }
+    }
+
+    /// 设备是否在线：mDNS 附近可见，或可达性探测成功。
+    ///
+    /// 跨网段手动配对的设备不会出现在 mDNS 里，只靠探测结果判断。
+    pub fn is_device_online(&self, device_id: &str) -> bool {
+        if self
+            .nearby
+            .read()
+            .expect("sync poisoned")
+            .contains_key(device_id)
+        {
+            return true;
+        }
+
+        self.online
+            .read()
+            .expect("sync poisoned")
+            .contains(device_id)
     }
 
     // ---- 文件共享授权 ----
@@ -1024,6 +1106,42 @@ pub fn emit_pair_result(app: &AppHandle, device_id: &str, accepted: bool, reason
     }
 }
 
+/// 探测已配对设备的可达性，并回写最近可用地址。
+///
+/// mDNS 只在同一广播域生效；跨网段手动配对的设备靠这一步维持在线显示，
+/// 探测成功的地址也会写回 `last_address`，供后续推送与拉取使用。
+async fn probe_paired_devices(app: &AppHandle, manager: &Arc<SyncManager>) {
+    let pool = app.state::<crate::db::DatabaseState>().pool().await;
+    let list = match devices::list_devices(&pool).await {
+        Ok(list) => list,
+        Err(err) => {
+            log::warn!("sync probe: list devices failed: {err}");
+            return;
+        }
+    };
+
+    let mut changed = false;
+    for device in list {
+        // 地址优先用 mDNS 缓存，其次用上次成功通信的地址。
+        let address = manager.device_address(&device.device_id, device.last_address.as_deref());
+        let Some(address) = address else {
+            changed |= manager.set_online(&device.device_id, false);
+            continue;
+        };
+
+        let online = client::probe_device(&address, &device.device_id).await;
+        changed |= manager.set_online(&device.device_id, online);
+
+        if online {
+            let _ = devices::touch_device(&pool, &device.device_id, &address).await;
+        }
+    }
+
+    if changed {
+        emit_devices_updated(app);
+    }
+}
+
 /// 组装同步状态快照（命令与事件共用）。
 pub async fn sync_state_payload(app: &AppHandle) -> SyncStateDto {
     let settings = app.state::<SettingsStore>().snapshot();
@@ -1049,7 +1167,7 @@ pub async fn sync_state_payload(app: &AppHandle) -> SyncStateDto {
             platform: platform_tag(record.platform).to_owned(),
             allow_send: record.allow_send,
             allow_receive: record.allow_receive,
-            online: nearby_ids.contains_key(&record.device_id),
+            online: manager.is_device_online(&record.device_id),
             last_seen_at: record.last_seen_at.map(|ts| ts.to_rfc3339()),
             last_pull_at: record.last_pull_at.map(|ts| ts.to_rfc3339()),
         })

@@ -57,11 +57,19 @@ pub fn start_pairing_with_entry(
         let device_id = entry.device_id.clone();
         let info = manager.device_info(&app);
         let seed = crypto::generate_pairing_seed();
+        // 本机服务端口：对端用它配合 TCP 源 IP 得到回连地址（跨网段也能双向同步）。
+        let port = manager.running_port().unwrap_or_else(|| {
+            app.state::<crate::settings::SettingsStore>()
+                .snapshot()
+                .sync
+                .port
+        });
         let request = PairRequestDto {
             device_id: info.device_id,
             name: info.name,
             platform: info.platform,
             seed: seed.clone(),
+            port: Some(port),
         };
 
         let client = match client() {
@@ -480,6 +488,31 @@ pub async fn pull_items(app: &AppHandle, device: &SyncDeviceRecord, address: &st
         crate::sync::devices::set_last_pull_at(&pool, &device.device_id, pulled_until).await?;
     }
     Ok(())
+}
+
+/// 轻量可达性探测：`/api/info` 返回且设备 id 匹配才算在线。
+///
+/// 校验设备 id 是为了避免该地址被其它程序占用时误判在线。
+pub async fn probe_device(address: &str, expected_device_id: &str) -> bool {
+    let Ok(client) = client() else {
+        return false;
+    };
+
+    let url = format!("http://{address}{API_INFO}");
+    let result = client
+        .get(&url)
+        .timeout(Duration::from_secs(2))
+        .send()
+        .await;
+    let resp = match result {
+        Ok(resp) if resp.status().is_success() => resp,
+        _ => return false,
+    };
+
+    match resp.json::<DeviceInfoDto>().await {
+        Ok(info) => info.device_id == expected_device_id,
+        Err(_) => false,
+    }
 }
 
 /// 读取对端设备信息（明文端点，用于手动地址配对）；失败说明地址不可达或不是 EcoPaste。

@@ -67,6 +67,12 @@ pub struct PairRequestDto {
     pub name: String,
     pub platform: String,
     pub seed: String,
+    /// 发起方同步服务监听端口。
+    ///
+    /// 跨网段手动配对时接收端无法通过 mDNS 获得发起方地址，
+    /// 用「TCP 源 IP + 该端口」拼出回连地址，保证配对后双向推送可用。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub port: Option<u16>,
 }
 
 /// 配对结果轮询响应。
@@ -157,7 +163,7 @@ pub struct PairedDeviceDto {
     pub platform: String,
     pub allow_send: bool,
     pub allow_receive: bool,
-    /// 设备当前是否在线（附近列表命中）。
+    /// 设备当前是否在线（mDNS 可见或可达性探测成功）。
     pub online: bool,
     pub last_seen_at: Option<String>,
     pub last_pull_at: Option<String>,

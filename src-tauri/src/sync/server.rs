@@ -5,10 +5,11 @@
 //! 请求 / 响应体均为 `nonce(12) || ChaCha20-Poly1305 密文`，
 //! 并带 `X-Device-Id` / `X-Timestamp` / `X-Signature` 认证头。
 
+use std::net::SocketAddr;
 use std::sync::Arc;
 
 use axum::body::Bytes;
-use axum::extract::{Path, Query, State};
+use axum::extract::{ConnectInfo, Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
@@ -72,7 +73,12 @@ pub fn spawn_server(
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
 
     tauri::async_runtime::spawn(async move {
-        let server = axum::serve(listener, router).with_graceful_shutdown(async move {
+        // 携带连接源地址：配对端点用它配合请求上报端口推导发起方回连地址。
+        let server = axum::serve(
+            listener,
+            router.into_make_service_with_connect_info::<SocketAddr>(),
+        )
+        .with_graceful_shutdown(async move {
             let mut shutdown_rx = shutdown_rx;
             while shutdown_rx.changed().await.is_ok() {
                 if *shutdown_rx.borrow() {
@@ -209,6 +215,7 @@ async fn handle_info(State(ctx): State<Arc<ServerCtx>>) -> Json<crate::sync::Dev
 
 async fn handle_pair(
     State(ctx): State<Arc<ServerCtx>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
     Json(request): Json<PairRequestDto>,
 ) -> Response {
     // 空字段防御：device_id / seed 是后续派生密钥的关键输入。
@@ -223,7 +230,10 @@ async fn handle_pair(
         Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     }
 
-    if ctx.manager.handle_pair_request(&ctx.app, request) {
+    if ctx
+        .manager
+        .handle_pair_request(&ctx.app, request, Some(peer.ip()))
+    {
         (StatusCode::ACCEPTED, Json(PairStatusDto::Pending)).into_response()
     } else {
         StatusCode::CONFLICT.into_response()
