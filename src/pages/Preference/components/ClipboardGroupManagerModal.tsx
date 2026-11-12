@@ -282,7 +282,7 @@ const ClipboardGroupTreeTitle: FC<ClipboardGroupTreeTitleProps> = (props) => {
         >
           <CustomIconButton
             className="size-6"
-            icon={<i aria-hidden="true" className="i-lucide:more-horizontal" />}
+            icon={<i aria-hidden="true" className="i-lucide:ellipsis" />}
             onClick={stopTreeInteraction}
             onMouseDown={stopTreeInteraction}
             size="small"

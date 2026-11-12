@@ -520,7 +520,7 @@ const WindowLifecycleSnapshotTable: FC<WindowLifecycleSnapshotTableProps> = (
           >
             <i
               aria-hidden="true"
-              className="i-lucide:circle-help shrink-0 text-ant-tertiary"
+              className="i-lucide:circle-question-mark shrink-0 text-ant-tertiary"
             />
           </Tooltip>
         </span>
@@ -539,7 +539,7 @@ const WindowLifecycleSnapshotTable: FC<WindowLifecycleSnapshotTableProps> = (
           >
             <i
               aria-hidden="true"
-              className="i-lucide:circle-help shrink-0 text-ant-tertiary"
+              className="i-lucide:circle-question-mark shrink-0 text-ant-tertiary"
             />
           </Tooltip>
         </span>

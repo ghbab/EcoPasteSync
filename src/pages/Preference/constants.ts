@@ -22,7 +22,7 @@ export const PREFERENCE_TAB_META: Record<PreferenceTabId, PreferenceTabMeta> = {
   },
   organize: {
     activeClass: "bg-ant-fill-secondary text-ant-text",
-    icon: "i-lucide:history",
+    icon: "i-lucide:clock-arrow-down",
   },
   record: {
     activeClass: "bg-ant-fill-secondary text-ant-text",
@@ -38,7 +38,7 @@ export const PREFERENCE_TAB_META: Record<PreferenceTabId, PreferenceTabMeta> = {
   },
   sync: {
     activeClass: "bg-ant-fill-secondary text-ant-text",
-    icon: "i-lucide:lan",
+    icon: "i-lucide:refresh-cw",
   },
   workflow: {
     activeClass: "bg-ant-fill-secondary text-ant-text",

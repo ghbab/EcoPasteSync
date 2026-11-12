@@ -153,7 +153,7 @@ export const preferenceTabs: PreferenceTab[] = [
     ],
   },
   {
-    icon: "i-lucide:history",
+    icon: "i-lucide:clock-arrow-down",
     id: "organize",
     sections: [
       {
@@ -821,7 +821,7 @@ export const preferenceTabs: PreferenceTab[] = [
     ],
   },
   {
-    icon: "i-lucide:lan",
+    icon: "i-lucide:refresh-cw",
     id: "sync",
     sections: [
       {

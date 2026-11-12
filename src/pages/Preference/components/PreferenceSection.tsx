@@ -244,7 +244,7 @@ function resolveSectionVisual(id: string): SectionVisual {
 
   if (normalizedId.includes("sync")) {
     return {
-      icon: "i-lucide:lan",
+      icon: "i-lucide:refresh-cw",
     };
   }
 
