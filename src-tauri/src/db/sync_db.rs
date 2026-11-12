@@ -157,9 +157,9 @@ async fn column_exists(pool: &SqlitePool, table: &str, column: &str) -> Result<b
         return Ok(false);
     }
 
-    // 表名只来自代码内常量，不存在注入面。
+    // 表名只来自代码内常量，不存在注入面；sqlx 0.9 要求动态 SQL 显式标记为安全。
     let sql = format!("PRAGMA table_info({table})");
-    let rows = sqlx::query(&sql)
+    let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
         .fetch_all(pool)
         .await
         .map_err(|err| crate::core::AppError::Other(err.into()))?;
