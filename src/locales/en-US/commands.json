@@ -17,6 +17,7 @@
     "completed": "Transfer complete",
     "conflictsHint": "Files with the same name already exist. Choose how to handle them; keeping both is selected by default.",
     "conflictsTitle": "Name conflicts ({{count}})",
+    "conflictsToggleHint": "Turn on to replace the local file; turn off to keep both and give the incoming file a new name. Changes take effect after you click Choose per item.",
     "copyPathsOnly": "Copy paths only",
     "custom": "Choose per item",
     "failed": "Transfer failed",

@@ -30,6 +30,8 @@ pub const STATUS_FAILED: &str = "failed";
 pub const STATUS_DONE: &str = "done";
 /// 任务状态：用户取消。
 pub const STATUS_CANCELLED: &str = "cancelled";
+/// 任务状态：全部冲突被跳过且没有其它待传文件，任务无需执行。
+pub const STATUS_SKIPPED: &str = "skipped";
 
 /// 单个文件的传输进度记录。
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -1,7 +1,7 @@
 <div align="center">
-  <img src="./public/logo.png" alt="EcoPaste" width="96" height="96" />
+  <img src="./public/logo.png" alt="EcoPasteSync" width="96" height="96" />
 
-  # EcoPaste
+  # EcoPasteSync
 
   **适用于 macOS 与 Windows 的本地优先剪贴板管理器。**
 
@@ -18,9 +18,11 @@
 
 ## 关于
 
-EcoPaste 是一个开源桌面剪贴板管理器，采用 Rust-First 的 Tauri 架构：持久化和系统侧能力优先由 Rust 承担，React 前端专注于界面展示与交互。
+EcoPasteSync 是一个开源桌面剪贴板管理器，采用 Rust-First 的 Tauri 架构：持久化和系统侧能力优先由 Rust 承担，React 前端专注于界面展示与交互。
 
-EcoPaste 的目标是更快、更轻、更易维护，并提供本地存储、SQLite 搜索、原生快捷键、托盘、备份，以及聚焦 macOS 与 Windows 的跨平台体验。
+EcoPasteSync 基于 [EcoPaste](https://github.com/EcoPasteHub/EcoPaste) 开发，在原有功能基础上增加了局域网同步功能。
+
+EcoPasteSync 的目标是更快、更轻、更易维护，并提供本地存储、SQLite 搜索、原生快捷键、托盘、备份，以及聚焦 macOS 与 Windows 的跨平台体验。
 
 ## 功能
 
@@ -33,7 +35,10 @@ EcoPaste 的目标是更快、更轻、更易维护，并提供本地存储、SQ
 - 通过收藏、置顶、备注、自定义分组和可配置快捷动作组织历史记录。
 - 可调整采集顺序、大小限制、保留策略、展示密度、列表排序和窗口行为。
 - 支持导出和导入 `.ecopastebak` 备份，包括加密备份包。
-- 剪贴板数据、资源缓存和设置均保存在本机。
+- 在局域网内与已配对设备双向同步剪贴板历史，传输加密，并可分别控制每台设备的发送与接收权限。
+- 粘贴同步文件时直接保存到当前资源管理器或 Finder 目录，同名冲突可逐项选择覆盖或保留两者，并显示实时传输进度。
+- 焦点位于地址栏、搜索框时，文件记录以路径文本形式粘贴。
+- 未开启同步时，剪贴板数据、资源缓存和设置均保存在本机。
 
 ## 参与贡献
 
@@ -41,4 +46,4 @@ EcoPaste 的目标是更快、更轻、更易维护，并提供本地存储、SQ
 
 ## 开源协议
 
-EcoPaste 基于 [Apache License 2.0](./LICENSE) 开源。
+EcoPasteSync 基于 [Apache License 2.0](./LICENSE) 开源。

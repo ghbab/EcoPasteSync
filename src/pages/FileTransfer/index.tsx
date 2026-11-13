@@ -41,6 +41,11 @@ const FileTransfer: FC = () => {
     try {
       const latest = await getLatestFileTransfer();
       if (latest !== null) {
+        // 全部冲突被跳过的任务无需展示进度，直接收起窗口。
+        if (latest.status === "skipped") {
+          void closeWindow();
+          return;
+        }
         setSnapshot(latest);
       }
     } catch {
@@ -59,6 +64,13 @@ const FileTransfer: FC = () => {
     TAURI_EVENT.SYNC_FILE_PROGRESS,
     (event) => {
       const next = event.payload;
+
+      // 全部冲突被跳过、没有实际待传文件时，窗口立即收起，不显示进度条。
+      if (next.status === "skipped") {
+        void closeWindow();
+        return;
+      }
+
       setSnapshot(next);
 
       // 同一任务结束后自动收起窗口；失败态保留，等待用户处理。
@@ -260,6 +272,10 @@ const FileTransfer: FC = () => {
             <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-hidden">
               <span className="text-ant-secondary text-xs">
                 {t("fileTransfer.conflictsHint")}
+              </span>
+
+              <span className="text-ant-secondary text-xs">
+                {t("fileTransfer.conflictsToggleHint")}
               </span>
 
               {/* 背景必须用已注册的 antd 颜色 token：bg-ant-base 在 antd v6 下没有对应变量，

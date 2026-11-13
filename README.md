@@ -1,7 +1,7 @@
 <div align="center">
-  <img src="./public/logo.png" alt="EcoPaste" width="96" height="96" />
+  <img src="./public/logo.png" alt="EcoPasteSync" width="96" height="96" />
 
-# EcoPaste
+# EcoPasteSync
 
 **A local-first clipboard manager for macOS and Windows.**
 
@@ -18,7 +18,9 @@ English | [简体中文](./README.zh-CN.md)
 
 ## About
 
-EcoPaste is an open-source desktop clipboard manager built with a Rust-first Tauri architecture: durable behavior lives in Rust, while the React frontend focuses on rendering and interaction.
+EcoPasteSync is an open-source desktop clipboard manager built with a Rust-first Tauri architecture: durable behavior lives in Rust, while the React frontend focuses on rendering and interaction.
+
+EcoPasteSync is based on [EcoPaste](https://github.com/EcoPasteHub/EcoPaste) and adds local network sync on top of the original features.
 
 The app is designed to be fast, lightweight, and maintainable, with local storage, SQLite search, native shortcuts, tray integration, backup support, and a focused cross-platform surface for macOS and Windows.
 
@@ -33,7 +35,10 @@ The app is designed to be fast, lightweight, and maintainable, with local storag
 - Organize history with favorites, pinned items, notes, custom groups, and configurable item actions.
 - Tune capture order, size limits, retention, display density, list sorting, and window behavior.
 - Export and import `.ecopastebak` backups, including encrypted backup containers.
-- Keep clipboard data, resources, and settings local to your machine.
+- Pair devices on the local network to sync clipboard history both ways, with encrypted transport and per-device send and receive permissions.
+- Paste synced files straight into the current Explorer or Finder folder, choose how to handle name conflicts, and watch live transfer progress.
+- Paste file records as plain paths when the address bar or search box is focused.
+- Keep clipboard data, resources, and settings local to your machine unless sync is enabled.
 
 ## Contributing
 
@@ -42,4 +47,4 @@ expectations live in the [contribution guide](./CONTRIBUTING.md).
 
 ## License
 
-EcoPaste is licensed under the [Apache License 2.0](./LICENSE).
+EcoPasteSync is licensed under the [Apache License 2.0](./LICENSE).
