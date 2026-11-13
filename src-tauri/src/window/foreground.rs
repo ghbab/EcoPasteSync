@@ -58,6 +58,13 @@ mod windows_impl {
     use winapi::um::winbase::QueryFullProcessImageNameW;
     use winapi::um::winnt::PROCESS_QUERY_LIMITED_INFORMATION;
     use winapi::um::winuser::{GetForegroundWindow, GetWindowThreadProcessId, IsWindow};
+    use windows::core::BSTR;
+    use windows::Win32::System::Com::{
+        CoCreateInstance, CoInitializeEx, CoUninitialize, IDispatch, CLSCTX_ALL,
+        COINIT_APARTMENTTHREADED,
+    };
+    use windows::Win32::System::Variant::VARIANT;
+    use windows::Win32::UI::Shell::{IShellWindows, IWebBrowser2, ShellWindows};
 
     /// CREATE_NO_WINDOW：避免每次粘贴都闪出控制台窗口。
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
@@ -142,8 +149,154 @@ mod windows_impl {
         None
     }
 
-    /// 用 Shell.Application 按 HWND 精确查询资源管理器窗口的当前目录。
+    /// 查询指定资源管理器窗口当前的目录。
+    ///
+    /// 优先走进程内 Shell COM：外部 `powershell.exe` 在部分机器上会被安全软件或
+    /// 策略拦截，直接以 -1 退出，导致探测必然失败。COM 不可用时再退回 PowerShell。
     fn query_explorer_path(hwnd: HWND) -> Option<PathBuf> {
+        if let Some(path) = com_explorer_path(hwnd) {
+            return Some(path);
+        }
+
+        powershell_explorer_path(hwnd)
+    }
+
+    /// 用进程内 Shell COM（ShellWindows + IWebBrowser2）按 HWND 取目录。
+    fn com_explorer_path(target: HWND) -> Option<PathBuf> {
+        // RPC_E_CHANGED_MODE：当前线程已用其它套间初始化过 COM，仍可继续调用。
+        const RPC_E_CHANGED_MODE: i32 = 0x8001_0106u32 as i32;
+
+        unsafe {
+            let init_result = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+            // S_OK / S_FALSE 都表示本次调用需要配对 CoUninitialize；
+            // RPC_E_CHANGED_MODE 表示 COM 已初始化但套间不同，可直接使用、无需反初始化。
+            let should_uninitialize: bool = init_result.is_ok();
+            if init_result.is_err() && init_result.0 != RPC_E_CHANGED_MODE {
+                log::warn!("foreground: CoInitializeEx failed: {init_result:?}");
+                return None;
+            }
+
+            let path: Option<PathBuf> = com_explorer_path_inner(target);
+
+            if should_uninitialize {
+                CoUninitialize();
+            }
+
+            path
+        }
+    }
+
+    /// 遍历 ShellWindows，匹配 HWND 后把 LocationURL 还原成本地目录。
+    fn com_explorer_path_inner(target: HWND) -> Option<PathBuf> {
+        unsafe {
+            let shell_windows: IShellWindows =
+                match CoCreateInstance(&ShellWindows, None, CLSCTX_ALL) {
+                    Ok(value) => value,
+                    Err(err) => {
+                        log::warn!("foreground: create ShellWindows failed: {err:?}");
+                        return None;
+                    }
+                };
+
+            let count: i32 = match shell_windows.Count() {
+                Ok(value) => value,
+                Err(err) => {
+                    log::warn!("foreground: ShellWindows.Count failed: {err:?}");
+                    return None;
+                }
+            };
+
+            for index in 0..count {
+                let variant: VARIANT = VARIANT::from(index);
+                let dispatch: IDispatch = match shell_windows.Item(&variant) {
+                    Ok(value) => value,
+                    Err(_) => continue,
+                };
+                let browser: IWebBrowser2 = match dispatch.cast() {
+                    Ok(value) => value,
+                    Err(_) => continue,
+                };
+                let window_handle: i32 = match browser.HWND() {
+                    Ok(value) => value,
+                    Err(_) => continue,
+                };
+                if window_handle as isize != target as isize {
+                    continue;
+                }
+
+                let location: BSTR = match browser.LocationURL() {
+                    Ok(value) => value,
+                    Err(_) => continue,
+                };
+                let location_text: String = location.to_string();
+                if let Some(path) = path_from_location_url(&location_text) {
+                    return Some(path);
+                }
+            }
+
+            None
+        }
+    }
+
+    /// 把资源管理器的 `file://` 地址还原成本地路径。
+    fn path_from_location_url(url: &str) -> Option<PathBuf> {
+        if let Some(rest) = url.strip_prefix("file:///") {
+            let decoded: String = percent_decode(rest);
+            let trimmed: &str = decoded.trim_end_matches('/');
+            return Some(PathBuf::from(trimmed.replace('/', "\\")));
+        }
+
+        // UNC：file://server/share/path
+        if let Some(rest) = url.strip_prefix("file://") {
+            let decoded: String = percent_decode(rest);
+            let trimmed: &str = decoded.trim_end_matches('/');
+            return Some(PathBuf::from(format!("\\\\{}", trimmed.replace('/', "\\"))));
+        }
+
+        None
+    }
+
+    /// 解码 URL 中的百分号转义（UTF-8）。
+    fn percent_decode(input: &str) -> String {
+        let bytes: &[u8] = input.as_bytes();
+        let mut output: Vec<u8> = Vec::with_capacity(bytes.len());
+        let mut index: usize = 0usize;
+
+        while index < bytes.len() {
+            if bytes[index] == b'%' && index + 2 < bytes.len() {
+                let high: Option<u8> = hex_value(bytes[index + 1]);
+                let low: Option<u8> = hex_value(bytes[index + 2]);
+                if let (Some(high), Some(low)) = (high, low) {
+                    output.push(high * 16 + low);
+                    index += 3;
+                    continue;
+                }
+            }
+
+            output.push(bytes[index]);
+            index += 1;
+        }
+
+        String::from_utf8_lossy(&output).into_owned()
+    }
+
+    /// 单个十六进制字符转数值。
+    fn hex_value(byte: u8) -> Option<u8> {
+        if byte.is_ascii_digit() {
+            return Some(byte - b'0');
+        }
+        if (b'a'..=b'f').contains(&byte) {
+            return Some(byte - b'a' + 10);
+        }
+        if (b'A'..=b'F').contains(&byte) {
+            return Some(byte - b'A' + 10);
+        }
+
+        None
+    }
+
+    /// 兜底：调用系统 PowerShell 查询目录。
+    fn powershell_explorer_path(hwnd: HWND) -> Option<PathBuf> {
         // HWND 统一按 int64 比较：Automation 暴露的 HWND 可能是 32 位有符号数，
         // 直接与 64 位句柄比较在部分系统上会漏匹配。
         let script = format!(
@@ -170,9 +323,12 @@ mod windows_impl {
             .ok()?;
 
         if !output.status.success() {
+            // 记录 stderr，便于判断是安全软件拦截还是语法/权限问题。
+            let stderr_text: String = String::from_utf8_lossy(&output.stderr).into_owned();
             log::warn!(
-                "foreground: powershell exited with {:?}",
-                output.status.code()
+                "foreground: powershell exited with {:?}, stderr={}",
+                output.status.code(),
+                stderr_text.trim()
             );
             return None;
         }
