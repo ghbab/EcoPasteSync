@@ -20,7 +20,7 @@ use std::path::PathBuf;
 pub fn explorer_directory() -> Option<PathBuf> {
     #[cfg(target_os = "windows")]
     {
-        return windows_impl::explorer_directory();
+        windows_impl::explorer_directory()
     }
 
     #[cfg(target_os = "macos")]

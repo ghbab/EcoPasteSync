@@ -21,7 +21,7 @@ pub fn apply_times(
 ) -> std::io::Result<()> {
     #[cfg(target_os = "windows")]
     {
-        return windows_impl::apply(path, mtime_ms, ctime_ms);
+        windows_impl::apply(path, mtime_ms, ctime_ms)
     }
 
     #[cfg(target_os = "macos")]

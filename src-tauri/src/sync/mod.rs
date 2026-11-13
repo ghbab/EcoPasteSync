@@ -2012,7 +2012,7 @@ fn file_ctime_ms(meta: &std::fs::Metadata) -> Option<i64> {
         const EPOCH_DIFF_100NS: i64 = 116_444_736_000_000_000;
         let intervals = i64::try_from(meta.creation_time()).ok()?;
 
-        return Some(intervals.checked_sub(EPOCH_DIFF_100NS)? / 10_000);
+        Some(intervals.checked_sub(EPOCH_DIFF_100NS)? / 10_000)
     }
 
     #[cfg(target_os = "macos")]
