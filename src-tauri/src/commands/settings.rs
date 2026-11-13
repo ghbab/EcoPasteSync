@@ -50,6 +50,7 @@ pub async fn update_settings(app: AppHandle, patch: serde_json::Value) -> Result
                 .is_some_and(|g| g.contains_key("runAsAdmin"))
         })
         .unwrap_or(false);
+    let touches_sync = patch_obj.map(|m| m.contains_key("sync")).unwrap_or(false);
 
     let next = app.state::<SettingsStore>().update(patch)?;
 
@@ -67,6 +68,10 @@ pub async fn update_settings(app: AppHandle, patch: serde_json::Value) -> Result
 
     if touches_run_as_admin {
         admin::sync_scheduled_task(next.general.run_as_admin);
+    }
+
+    if touches_sync {
+        crate::sync::apply_settings(&app, &next);
     }
 
     emit_settings_updated(&app, &next);
@@ -104,6 +109,9 @@ fn apply_reset_side_effects(app: &AppHandle, settings: &Settings) {
     }
 
     admin::sync_scheduled_task(settings.general.run_as_admin);
+
+    // 重置会把 sync.enabled 回到默认关闭。
+    crate::sync::apply_settings(app, settings);
 }
 
 /// 广播最新设置快照给所有前端窗口。

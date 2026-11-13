@@ -15,9 +15,17 @@ export const WINDOW_LABEL = {
    */
   CONTEXT_SUBMENU: "context-submenu",
   /**
+   * 局域网文件传输进度窗口（桌面居中置顶，参照系统复制对话框）。
+   */
+  FILE_TRANSFER: "file-transfer",
+  /**
    * 首次启动引导窗口。
    */
   ONBOARDING: "onboarding",
+  /**
+   * 局域网同步配对请求窗口（桌面居中置顶）。
+   */
+  PAIR_REQUEST: "pair-request",
   /**
    * 偏好设置窗口。
    */
@@ -26,8 +34,4 @@ export const WINDOW_LABEL = {
    * 剪贴板系统级预览 overlay 窗口。
    */
   PREVIEW: "clipboard-preview",
-  /**
-   * 软件更新窗口。
-   */
-  UPDATE: "update",
 } as const;

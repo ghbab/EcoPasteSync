@@ -62,6 +62,13 @@ pub struct ClipboardItem {
     /// 命中敏感内容规则且被收录的条目；展示是否脱敏由当前设置决定。
     pub is_sensitive: bool,
     pub platform: Platform,
+    /// 同步入库时的来源设备 id；本机复制产生的条目为 `None`。
+    ///
+    /// 该值不落主库：来源设备存放在独立同步库的 `sync_item_meta`，运行时按需拼装。
+    /// 文件拉取授权改为显式查询同步库，不能依赖本字段（列表裁剪路径可能不填充它）。
+    #[sqlx(default)]
+    #[serde(skip)]
+    pub sync_source_device_id: Option<String>,
     pub note: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -157,6 +164,8 @@ pub struct FileEntry {
     pub is_image: bool,
     /// 命令层组装时实时检测：路径是否仍存在于磁盘，前端据此对失效条目划删除线并回退预览。
     pub exists: bool,
+    /// 该条目由远端设备同步而来：前端显示「来自远端」标记，粘贴时按需传输文件本体。
+    pub remote: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub icon_path: Option<String>,
 }

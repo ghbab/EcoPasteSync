@@ -5,7 +5,6 @@ interface SettingVisual {
 }
 
 const SETTING_ICON_MAP: Record<string, string> = {
-  "about.checkUpdates": "i-lucide:refresh-cw",
   "about.github": "i-lucide:github",
   "about.sponsor": "i-ph:hand-heart",
   "actions.deleteConfirm": "i-lucide:trash-2",
@@ -68,10 +67,16 @@ const SETTING_ICON_MAP: Record<string, string> = {
   "shortcuts.openPreference": "i-lucide:settings",
   "shortcuts.winV": "i-lucide:clipboard-list",
   "source.excludedApps": "i-lucide:shield-ban",
-  "updates.autoCheck": "i-lucide:refresh-cw",
-  "updates.beta": "i-lucide:flask-conical",
-  "updates.frequency": "i-lucide:calendar-sync",
-  "updates.nightly": "i-lucide:moon",
+  "sync.deviceName": "i-lucide:pen-line",
+  "sync.devices": "i-lucide:monitor-smartphone",
+  "sync.discoverable": "i-lucide:radar",
+  "sync.enabled": "i-lucide:repeat-2",
+  "sync.fileMaxSize": "i-lucide:hard-drive",
+  "sync.fileThreshold": "i-lucide:gauge",
+  "sync.port": "i-lucide:network",
+  "sync.syncFiles": "i-lucide:files",
+  "sync.syncImage": "i-lucide:image",
+  "sync.syncText": "i-lucide:letter-text",
   "window.idleDestroySeconds": "i-lucide:timer-reset",
   "window.lightweightMode": "i-lucide:leaf",
   "window.position": "i-lucide:move",

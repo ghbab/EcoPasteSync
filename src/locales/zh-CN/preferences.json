@@ -1,15 +1,14 @@
 {
   "about": {
-    "checkUpdates": "检查更新",
     "sponsor": "赞赏支持",
-    "sponsorHint": "如果 EcoPaste 帮到了你，可以给项目一点支持。",
+    "sponsorHint": "如果 EcoPasteSync 帮到了你，可以给项目一点支持。",
     "sponsorQrAlt": "赞赏二维码"
   },
   "backup": {
     "export": {
       "confirmPassword": "确认密码",
       "confirmRequired": "请再次输入备份密码",
-      "encryptedHint": "备份会用你输入的密码加密。EcoPaste 不会保存密码，忘记后无法恢复。",
+      "encryptedHint": "备份会用你输入的密码加密。EcoPasteSync 不会保存密码，忘记后无法恢复。",
       "modeEncrypted": "加密备份（推荐）",
       "modePlain": "明文备份",
       "ok": "选择保存位置",
@@ -23,11 +22,11 @@
       "plainConfirmRequired": "请确认明文备份风险",
       "plainWarning": "任何拿到文件的人都可以直接读取备份内容。",
       "plainWarningTitle": "明文备份不受密码保护",
-      "title": "导出 EcoPaste 备份"
+      "title": "导出 EcoPasteSync 备份"
     },
-    "fileFilter": "EcoPaste 备份",
+    "fileFilter": "EcoPasteSync 备份",
     "import": {
-      "fileFallback": "EcoPaste 备份文件",
+      "fileFallback": "EcoPasteSync 备份文件",
       "ok": "导入",
       "overwriteConfirm": "我已阅读风险提示，确认覆盖当前数据",
       "overwriteConfirmRequired": "请确认覆盖导入风险",
@@ -36,11 +35,11 @@
       "overwriteWarning": "覆盖导入会立即替换已选择的当前数据。合并导入更适合日常恢复；只有确定要以备份为准时再选择覆盖。",
       "password": "备份密码",
       "passwordRequired": "请输入备份密码",
-      "pickTitle": "选择 EcoPaste 备份",
+      "pickTitle": "选择 EcoPasteSync 备份",
       "strategy": "导入方式",
       "strategyMerge": "合并导入",
       "strategyOverwrite": "覆盖导入",
-      "title": "导入 EcoPaste 备份",
+      "title": "导入 EcoPasteSync 备份",
       "typeEncrypted": "加密备份，导入时需要密码",
       "typePlain": "未加密备份"
     },
@@ -84,7 +83,7 @@
         "title": "外观与语言"
       },
       "backup": {
-        "description": "导出或导入 EcoPaste 备份包。",
+        "description": "导出或导入 EcoPasteSync 备份包。",
         "title": "备份迁移"
       },
       "capture": {
@@ -132,8 +131,11 @@
       "source": {
         "title": "应用过滤"
       },
-      "updates": {
-        "title": "更新"
+      "syncDevices": {
+        "title": "设备管理"
+      },
+      "syncGeneral": {
+        "title": "常规"
       },
       "window": {
         "title": "剪贴板窗口"
@@ -141,17 +143,12 @@
     },
     "settings": {
       "about": {
-        "checkUpdates": {
-          "controlLabel": "检查更新",
-          "description": "检查 EcoPaste 是否有可用的新版本。",
-          "title": "检查更新"
-        },
         "github": {
           "controlLabel": "打开",
           "title": "GitHub"
         },
         "sponsor": {
-          "description": "如果 EcoPaste 帮到了你，可以给项目一点支持。",
+          "description": "如果 EcoPasteSync 帮到了你，可以给项目一点支持。",
           "title": "赞赏支持"
         }
       },
@@ -196,7 +193,7 @@
           "title": "图片最大显示高度"
         },
         "language": {
-          "description": "切换 EcoPaste 的界面语言。",
+          "description": "切换 EcoPasteSync 的界面语言。",
           "options": {
             "en-US": "English",
             "zh-CN": "简体中文"
@@ -270,26 +267,26 @@
       },
       "control": {
         "autoStart": {
-          "description": "登录系统后自动启动 EcoPaste。",
+          "description": "登录系统后自动启动 EcoPasteSync。",
           "macos": {
-            "description": "登录后自动启动 EcoPaste。",
+            "description": "登录后自动启动 EcoPasteSync。",
             "title": "登录时启动"
           },
           "title": "开机启动",
           "windows": {
-            "description": "登录后自动启动 EcoPaste。",
+            "description": "登录后自动启动 EcoPasteSync。",
             "title": "开机启动"
           }
         },
         "dockIcon": {
-          "description": "在系统桌面栏显示 EcoPaste 图标。",
+          "description": "在系统桌面栏显示 EcoPasteSync 图标。",
           "macos": {
-            "description": "在程序坞显示 EcoPaste 图标。",
+            "description": "在程序坞显示 EcoPasteSync 图标。",
             "title": "程序坞图标"
           },
           "title": "桌面栏图标",
           "windows": {
-            "description": "在任务栏显示 EcoPaste 图标。",
+            "description": "在任务栏显示 EcoPasteSync 图标。",
             "title": "任务栏图标"
           }
         },
@@ -299,14 +296,14 @@
           "title": "重新打开引导"
         },
         "trayIcon": {
-          "description": "在系统状态栏显示 EcoPaste 图标。",
+          "description": "在系统状态栏显示 EcoPasteSync 图标。",
           "macos": {
-            "description": "在菜单栏显示 EcoPaste 图标。",
+            "description": "在菜单栏显示 EcoPasteSync 图标。",
             "title": "菜单栏图标"
           },
           "title": "状态栏图标",
           "windows": {
-            "description": "在系统托盘显示 EcoPaste 图标。",
+            "description": "在系统托盘显示 EcoPasteSync 图标。",
             "title": "系统托盘图标"
           }
         }
@@ -378,8 +375,7 @@
             "contextSubmenu": "右键子菜单窗口",
             "onboarding": "引导窗口",
             "preference": "偏好设置窗口",
-            "preview": "剪贴板预览窗口",
-            "update": "软件更新窗口"
+            "preview": "剪贴板预览窗口"
           }
         }
       },
@@ -465,7 +461,7 @@
           "title": "辅助功能访问权限"
         },
         "adminRestartConfirm": {
-          "content": "EcoPaste 需要以管理员权限重启后，此设置才会生效。Windows 可能会弹出用户账户控制确认窗口。",
+          "content": "EcoPasteSync 需要以管理员权限重启后，此设置才会生效。Windows 可能会弹出用户账户控制确认窗口。",
           "ok": "重启",
           "title": "需要重启"
         },
@@ -474,7 +470,7 @@
           "title": "完全磁盘访问权限"
         },
         "runAsAdministrator": {
-          "description": "用于以管理员权限重启 EcoPaste，并在需要时让后续启动保持提权运行。",
+          "description": "用于以管理员权限重启 EcoPasteSync，并在需要时让后续启动保持提权运行。",
           "title": "管理员权限启动"
         }
       },
@@ -538,7 +534,7 @@
           "title": "打开偏好设置窗口"
         },
         "winV": {
-          "description": "按 Win+V 唤起 EcoPaste，替代 Windows 系统剪贴板历史面板。",
+          "description": "按 Win+V 唤起 EcoPasteSync，替代 Windows 系统剪贴板历史面板。",
           "title": "接管 Win+V"
         }
       },
@@ -558,27 +554,85 @@
           "title": "忽略应用"
         }
       },
-      "updates": {
-        "autoCheck": {
-          "description": "定期检查 EcoPaste 是否有可用的新版本。",
-          "title": "自动检查更新"
+      "sync": {
+        "deviceName": {
+          "description": "对局域网内其它设备显示的本机名称。",
+          "placeholder": "留空时使用主机名",
+          "title": "设备名称"
         },
-        "beta": {
-          "description": "检查更新时同时接收测试版。",
-          "title": "接收测试版更新"
-        },
-        "frequency": {
-          "description": "设置自动检查更新的时间间隔。",
-          "options": {
-            "daily": "每天",
-            "monthly": "每月",
-            "weekly": "每周"
+        "devices": {
+          "blockedTitle": "已忽略设备",
+          "description": "管理附近设备、已配对设备与已忽略设备。",
+          "disabledHint": "开启局域网同步后，此处会显示附近设备",
+          "emptyBlocked": "暂无已忽略设备",
+          "emptyNearby": "暂无附近设备",
+          "emptyPaired": "暂无已配对设备",
+          "localDeviceName": "本机设备名：{{name}}",
+          "manualPairHint": "输入对方IP（默认端口可不填）发起配对。",
+          "manualPairPlaceholder": "192.168.1.20:47654",
+          "manualPairSubmit": "发起配对",
+          "manualPairTitle": "手动配对",
+          "manualPairWaiting": "等待对方确认…",
+          "nearbyTitle": "附近设备",
+          "offline": "离线",
+          "online": "在线",
+          "pair": "配对",
+          "pairedTitle": "已配对设备",
+          "pairFailed": {
+            "device-offline": "设备已离线",
+            "internal-error": "内部错误",
+            "network-error": "网络错误",
+            "pair-rejected": "对方拒绝了配对请求",
+            "timeout": "配对超时"
           },
-          "title": "自动检查频率"
+          "pairRequestAccept": "允许",
+          "pairRequestContent": "设备「{{name}}」（{{platform}}）请求与本机同步剪贴板",
+          "pairRequestReject": "拒绝",
+          "pairRequestSasHint": "若下方验证码与对方设备显示的一致，请点击「允许」：",
+          "pairRequestTitle": "配对请求",
+          "pairSasHint": "请核对与对方设备上显示的验证码是否一致：",
+          "pairSasTitle": "配对验证码",
+          "pairSuccess": "配对成功",
+          "receive": "接收",
+          "refresh": "刷新附近设备",
+          "rename": "重命名",
+          "send": "发送",
+          "title": "设备管理",
+          "unblock": "取消忽略",
+          "unpair": "解除配对",
+          "unpairConfirm": "解除配对后，该设备将无法再与本机同步剪贴板。"
         },
-        "nightly": {
-          "description": "检查更新时同时接收每日构建版本。",
-          "title": "接收每日构建更新"
+        "discoverable": {
+          "description": "关闭后本机不会出现在其它设备的附近列表中，也不接受新的配对请求；已配对设备仍可正常同步。",
+          "title": "允许被发现"
+        },
+        "enabled": {
+          "description": "开启后可与同一局域网内的 EcoPasteSync 设备配对并同步剪贴板。",
+          "title": "启用局域网同步"
+        },
+        "fileMaxSize": {
+          "description": "条目内文件总大小超过该值时不再传输，仅同步文件路径。",
+          "title": "文件传输上限"
+        },
+        "fileThreshold": {
+          "description": "条目内文件总大小不超过该值时随记录一并传输；更大的只同步路径，在粘贴时按需拉取。",
+          "title": "直接传输上限"
+        },
+        "port": {
+          "description": "同步服务监听端口，被占用时自动尝试后续端口。",
+          "title": "同步端口"
+        },
+        "syncFiles": {
+          "description": "文件条目参与局域网同步，文件本体在粘贴时按需传输。",
+          "title": "同步文件"
+        },
+        "syncImage": {
+          "description": "图片内容参与局域网同步。",
+          "title": "同步图片"
+        },
+        "syncText": {
+          "description": "文本内容（含链接、HTML、RTF）参与局域网同步。",
+          "title": "同步文本"
         }
       },
       "window": {
@@ -653,8 +707,11 @@
       "shortcuts": {
         "title": "快捷键"
       },
+      "sync": {
+        "title": "同步"
+      },
       "workflow": {
-        "title": "界面"
+        "title": "工作流"
       }
     }
   },

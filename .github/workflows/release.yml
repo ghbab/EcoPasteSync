@@ -7,7 +7,7 @@ name: Release CI
   workflow_dispatch:
     inputs:
       tag_name:
-        description: "Release tag to build, for example v0.6.0-beta.4"
+        description: "Release tag to build, for example v1.1.0.1 or v1.1.0.1-debug.1"
         required: true
         type: string
 
@@ -36,7 +36,7 @@ jobs:
         id: release
         shell: bash
         env:
-          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
           INPUT_TAG_NAME: ${{ inputs.tag_name }}
         run: |
           set -euo pipefail
@@ -46,8 +46,10 @@ jobs:
             tag_name="${INPUT_TAG_NAME}"
           fi
 
-          if [[ ! "${tag_name}" =~ ^v[0-9]+ ]]; then
-            echo "::error::Release tag must start with v followed by a version, got '${tag_name}'."
+          # 版本方案：正式版 v<上游三段>.<发布序号>，如 v1.1.0.1；
+          # 验证打包用调试版 v<正式版本>-debug.<序号>，如 v1.1.0.1-debug.1。
+          if [[ ! "${tag_name}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+(-debug\.[0-9]+)?$ ]]; then
+            echo "::error::Release tag must look like v1.1.0.1 or v1.1.0.1-debug.1, got '${tag_name}'."
             exit 1
           fi
 
@@ -59,62 +61,76 @@ jobs:
 
           git checkout --detach "refs/tags/${tag_name}"
 
-          if [[ ! -f CHANGELOG.md ]]; then
-            echo "::error::CHANGELOG.md is required. Run release-it before pushing the release tag."
-            exit 1
-          fi
-          if [[ ! -f CHANGELOG.zh-CN.md ]]; then
-            echo "::error::CHANGELOG.zh-CN.md is required. Run release-it before pushing the release tag."
-            exit 1
-          fi
-
           version="${tag_name#v}"
-          extract_changelog_section() {
-            local file="$1"
-            local output="$2"
-
-            awk -v version="${version}" '
-            function is_target_heading(line) {
-              return line ~ "^##[[:space:]]+\\[?" version "\\]?"
-            }
-
-            /^##[[:space:]]+/ {
-              if (capture) {
-                exit
-              }
-
-              if (is_target_heading($0)) {
-                capture = 1
-                next
-              }
-            }
-
-            capture {
-              print
-            }
-            ' "${file}" | sed '/./,$!d' > "${output}"
-          }
-
-          extract_changelog_section CHANGELOG.md release-body-en.md
-          extract_changelog_section CHANGELOG.zh-CN.md release-body-zh.md
-
-          if [[ ! -s release-body-en.md ]]; then
-            echo "::error::CHANGELOG.md does not contain a release section for ${version}."
-            exit 1
-          fi
-          if [[ ! -s release-body-zh.md ]]; then
-            echo "::error::CHANGELOG.zh-CN.md does not contain a release section for ${version}."
-            exit 1
+          debug=false
+          if [[ "${version}" == *-debug.* ]]; then
+            debug=true
           fi
 
-          {
-            cat release-body-en.md
-            printf '\n\n<hr>\n\n'
-            cat release-body-zh.md
-          } > release-body.md
+          if [[ "${debug}" == "true" ]]; then
+            # 调试 tag 只用于验证打包，不要求对应的 CHANGELOG 段落。
+            {
+              printf 'Debug build for packaging verification.\n\n'
+              printf '<hr>\n\n'
+              printf '用于验证打包流程的调试构建。\n'
+            } > release-body.md
+          else
+            if [[ ! -f CHANGELOG.md ]]; then
+              echo "::error::CHANGELOG.md is required. Add a '## [${version}]' section before pushing the release tag."
+              exit 1
+            fi
+            if [[ ! -f CHANGELOG.zh-CN.md ]]; then
+              echo "::error::CHANGELOG.zh-CN.md is required. Add a '## [${version}]' section before pushing the release tag."
+              exit 1
+            fi
+
+            extract_changelog_section() {
+              local file="$1"
+              local output="$2"
+
+              awk -v version="${version}" '
+              function is_target_heading(line) {
+                return line ~ "^##[[:space:]]+\\[?" version "\\]?"
+              }
+
+              /^##[[:space:]]+/ {
+                if (capture) {
+                  exit
+                }
+
+                if (is_target_heading($0)) {
+                  capture = 1
+                  next
+                }
+              }
+
+              capture {
+                print
+              }
+              ' "${file}" | sed '/./,$!d' > "${output}"
+            }
+
+            extract_changelog_section CHANGELOG.md release-body-en.md
+            extract_changelog_section CHANGELOG.zh-CN.md release-body-zh.md
+
+            if [[ ! -s release-body-en.md ]]; then
+              echo "::error::CHANGELOG.md does not contain a release section for ${version}."
+              exit 1
+            fi
+            if [[ ! -s release-body-zh.md ]]; then
+              echo "::error::CHANGELOG.zh-CN.md does not contain a release section for ${version}."
+              exit 1
+            fi
+
+            {
+              cat release-body-en.md
+              printf '\n\n<hr>\n\n'
+              cat release-body-zh.md
+            } > release-body.md
+          fi
 
           prerelease=false
-          if [[ "${version}" == *-* ]]; then
+          if [[ "${debug}" == "true" || "${version}" == *-* ]]; then
             prerelease=true
           fi
 
@@ -205,49 +221,58 @@ jobs:
           tag_name="${{ needs.release-metadata.outputs.tag_name }}"
           version="${tag_name#v}"
 
-          extract_changelog_section() {
-            local file="$1"
-            local output="$2"
+          if [[ "${version}" == *-debug.* ]]; then
+            # 调试 tag 只用于验证打包，不要求对应的 CHANGELOG 段落。
+            {
+              printf 'Debug build for packaging verification.\n\n'
+              printf '<hr>\n\n'
+              printf '用于验证打包流程的调试构建。\n'
+            } > release-body.md
+          else
+            extract_changelog_section() {
+              local file="$1"
+              local output="$2"
 
-            awk -v version="${version}" '
-            function is_target_heading(line) {
-              return line ~ "^##[[:space:]]+\\[?" version "\\]?"
-            }
-
-            /^##[[:space:]]+/ {
-              if (capture) {
-                exit
+              awk -v version="${version}" '
+              function is_target_heading(line) {
+                return line ~ "^##[[:space:]]+\\[?" version "\\]?"
               }
 
-              if (is_target_heading($0)) {
-                capture = 1
-                next
+              /^##[[:space:]]+/ {
+                if (capture) {
+                  exit
+                }
+
+                if (is_target_heading($0)) {
+                  capture = 1
+                  next
+                }
               }
+
+              capture {
+                print
+              }
+              ' "${file}" | sed '/./,$!d' > "${output}"
             }
 
-            capture {
-              print
-            }
-            ' "${file}" | sed '/./,$!d' > "${output}"
-          }
+            extract_changelog_section CHANGELOG.md release-body-en.md
+            extract_changelog_section CHANGELOG.zh-CN.md release-body-zh.md
 
-          extract_changelog_section CHANGELOG.md release-body-en.md
-          extract_changelog_section CHANGELOG.zh-CN.md release-body-zh.md
+            if [[ ! -s release-body-en.md ]]; then
+              echo "::error::CHANGELOG.md does not contain a release section for ${version}."
+              exit 1
+            fi
+            if [[ ! -s release-body-zh.md ]]; then
+              echo "::error::CHANGELOG.zh-CN.md does not contain a release section for ${version}."
+              exit 1
+            fi
 
-          if [[ ! -s release-body-en.md ]]; then
-            echo "::error::CHANGELOG.md does not contain a release section for ${version}."
-            exit 1
+            {
+              cat release-body-en.md
+              printf '\n\n<hr>\n\n'
+              cat release-body-zh.md
+            } > release-body.md
           fi
-          if [[ ! -s release-body-zh.md ]]; then
-            echo "::error::CHANGELOG.zh-CN.md does not contain a release section for ${version}."
-            exit 1
-          fi
-
-          {
-            cat release-body-en.md
-            printf '\n\n<hr>\n\n'
-            cat release-body-zh.md
-          } > release-body.md
 
           delimiter="CHANGELOG_BODY_${RANDOM}_${RANDOM}"
           {
@@ -256,18 +281,79 @@ jobs:
             echo "${delimiter}"
           } >> "${GITHUB_OUTPUT}"
 
-      - name: Build and upload app
-        uses: tauri-apps/tauri-action@v1
+      # Windows 只产出裸 exe（不构建安装包），macOS 产出 dmg 与 updater 用的 app.tar.gz。
+      # 关闭 CI 环境变量，避免 Tauri 打包器按 CI 模式改变产物行为。
+      - name: Build app
+        shell: bash
         env:
           CI: false
-          GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN }}
           PLATFORM: ${{ matrix.os }}
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        with:
-          args: --target ${{ matrix.target }}
-          prerelease: ${{ needs.release-metadata.outputs.prerelease }}
-          releaseBody: ${{ steps.changelog.outputs.body }}
-          releaseId: ${{ needs.release-metadata.outputs.release_id }}
-          retryAttempts: 3
-          tagName: ${{ needs.release-metadata.outputs.tag_name }}
+        run: |
+          set -euo pipefail
+
+          if [[ "${{ runner.os }}" == "Windows" ]]; then
+            pnpm tauri build --target ${{ matrix.target }} --no-bundle
+          else
+            pnpm tauri build --target ${{ matrix.target }} --bundles app,dmg
+          fi
+
+      # 统一产物命名：EcoPasteSync_<tag>_<平台>_<架构>.<类型>
+      # 例如 EcoPasteSync_v1.1.0.1-debug.12_windows_x64.zip。
+      - name: Package and upload assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+
+          tag_name="${{ needs.release-metadata.outputs.tag_name }}"
+          release_dir="src-tauri/target/${{ matrix.target }}/release"
+
+          arch="x64"
+          if [[ "${{ matrix.target }}" == aarch64* ]]; then
+            arch="aarch64"
+          fi
+
+          platform="windows"
+          if [[ "${{ runner.os }}" == "macOS" ]]; then
+            platform="macos"
+          fi
+
+          base_name="EcoPasteSync_${tag_name}_${platform}_${arch}"
+          assets=()
+
+          if [[ "${platform}" == "windows" ]]; then
+            exe="${release_dir}/EcoPasteSync.exe"
+            if [[ ! -f "${exe}" ]]; then
+              # 兜底：部分 Tauri 版本仍保留 Cargo 包名作为二进制名。
+              exe="${release_dir}/EcoPaste.exe"
+            fi
+            if [[ ! -f "${exe}" ]]; then
+              echo "::error::Portable exe not found under ${release_dir}."
+              exit 1
+            fi
+
+            dist="dist-portable"
+            rm -rf "${dist}"
+            mkdir -p "${dist}"
+            cp "${exe}" "${dist}/EcoPasteSync.exe"
+
+            zip_name="${base_name}.zip"
+            powershell -NoProfile -Command "Compress-Archive -Path 'dist-portable/*' -DestinationPath '${zip_name}' -Force"
+            assets+=("${zip_name}")
+          else
+            # 应用已移除自动更新能力，macOS 只需分发 dmg 安装镜像。
+            dmg_files=("${release_dir}"/bundle/dmg/*.dmg)
+            if [[ ${#dmg_files[@]} -eq 0 ]]; then
+              echo "::error::macOS dmg not found under ${release_dir}/bundle/dmg."
+              exit 1
+            fi
+
+            dmg_name="${base_name}.dmg"
+            cp "${dmg_files[0]}" "${dmg_name}"
+            assets+=("${dmg_name}")
+          fi
+
+          echo "Uploading ${assets[*]} to release ${tag_name}"
+          gh release upload "${tag_name}" "${assets[@]}" --clobber

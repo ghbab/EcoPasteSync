@@ -7,6 +7,7 @@ export type PreferenceTabId =
   | "workflow"
   | "shortcuts"
   | "data"
+  | "sync"
   | "about";
 
 export interface RetentionSettingValue {
@@ -66,6 +67,7 @@ export type PreferenceControl =
   | { type: "shortcutRecorder" }
   | { type: "textarea" }
   | { type: "appExclusion" }
+  | { type: "syncDevices"; key: "sync.devices" }
   | { type: "action"; danger?: boolean }
   | { type: "sponsorQr" }
   | { type: "status" }

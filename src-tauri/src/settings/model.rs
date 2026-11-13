@@ -18,7 +18,7 @@ pub struct Settings {
     pub shortcuts: Shortcuts,
     pub clipboard: Clipboard,
     pub onboarding: Onboarding,
-    pub update: Update,
+    pub sync: Sync,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -625,22 +625,48 @@ pub struct Feedback {
     pub copy_sound: bool,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+/// 局域网同步设置。设备信任关系与黑名单存 SQLite（`sync_devices` / `sync_blacklist`），
+/// 这里只放开关与网络参数。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default, rename_all = "camelCase")]
-pub struct Update {
-    pub auto_check: bool,
-    pub frequency: UpdateFrequency,
-    pub include_beta: bool,
-    pub include_nightly: bool,
-    pub last_checked_at: Option<String>,
-    pub skipped_version: Option<String>,
+pub struct Sync {
+    /// 同步总开关。关闭即停 mDNS 发现与 HTTP 服务器。
+    pub enabled: bool,
+    /// 本机对外设备名；空串回落主机名。
+    pub device_name: String,
+    /// 同步服务器首选端口；被占用时自动 +1 探测（实际端口随 mDNS 广播）。
+    pub port: u16,
+    /// 是否允许被局域网内其它设备发现。
+    ///
+    /// 关闭后不再广播 mDNS 服务，也不再接受新的配对请求；已配对设备之间的
+    /// 同步不依赖广播，仍按记录的地址继续工作。
+    pub discoverable: bool,
+    /// 文本条目（含 HTML / RTF / URL 等子类型）是否同步。
+    pub sync_text: bool,
+    /// 图片条目是否同步。
+    pub sync_image: bool,
+    /// 文件路径记录是否同步。
+    pub sync_files: bool,
+    /// 文件本体直接传输阈值（MB，按条目内文件总大小计）。不超过该值的文件随
+    /// 元数据一并推送字节；超过则只同步路径，接收端在粘贴时按需分块拉取。
+    pub file_threshold: u64,
+    /// 文件传输上限（MB，按条目内文件总大小计）。超过该值只同步路径且不再提供
+    /// 拉取，避免把超大条目误当可传输内容。
+    pub file_max_size: u64,
 }
 
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub enum UpdateFrequency {
-    #[default]
-    Daily,
-    Weekly,
-    Monthly,
+impl Default for Sync {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            device_name: String::new(),
+            port: 39782,
+            discoverable: true,
+            sync_text: true,
+            sync_image: true,
+            sync_files: true,
+            file_threshold: 5,
+            file_max_size: 512,
+        }
+    }
 }

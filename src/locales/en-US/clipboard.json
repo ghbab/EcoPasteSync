@@ -23,6 +23,9 @@
     "searchGroupFavorites": "No favorites in \"{{group}}\" match \"{{keyword}}\"",
     "searchHistory": "No records found for \"{{keyword}}\""
   },
+  "files": {
+    "remoteSource": "From a remote device; transferred on paste"
+  },
   "footer": {
     "shortcuts": "Shortcuts",
     "total": "{{count}} items"
@@ -52,7 +55,7 @@
   },
   "header": {
     "clearRecords": "Clear records",
-    "logoAlt": "EcoPaste logo",
+    "logoAlt": "EcoPasteSync logo",
     "moreActions": "More actions",
     "openPreference": "Preferences",
     "pin": "Pin window",

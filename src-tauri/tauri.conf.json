@@ -24,7 +24,7 @@
         "minHeight": 600,
         "minWidth": 360,
         "skipTaskbar": true,
-        "title": "EcoPaste",
+        "title": "EcoPasteSync",
         "transparent": true,
         "url": "index.html/#/",
         "visible": false,
@@ -41,17 +41,16 @@
   "bundle": {
     "active": true,
     "copyright": "Copyright 2026 ayangweb",
-    "createUpdaterArtifacts": true,
     "fileAssociations": [
       {
-        "description": "EcoPaste history backup",
+        "description": "EcoPasteSync history backup",
         "exportedType": {
           "conformsTo": ["public.data"],
           "identifier": "com.ayangweb.eco-paste.backup"
         },
         "ext": ["ecopastebak"],
         "mimeType": "application/vnd.ecopaste.backup",
-        "name": "EcoPaste Backup",
+        "name": "EcoPasteSync Backup",
         "role": "Editor"
       }
     ],
@@ -65,20 +64,10 @@
     "license": "Apache-2.0",
     "licenseFile": "../LICENSE",
     "resources": ["assets/tray.ico"],
-    "shortDescription": "EcoPaste",
-    "targets": ["nsis", "dmg", "app"]
+    "shortDescription": "EcoPasteSync",
+    "targets": ["dmg", "app"]
   },
   "identifier": "com.ayangweb.eco-paste",
-  "plugins": {
-    "updater": {
-      "active": true,
-      "endpoints": ["https://releases.ecopaste.cn/update?channel=stable"],
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDIwMzUzRkJCQUI3NjY4RgpSV1NQWnJlNisxTURBbFE2WWJpUlBJR0x0OXJOclVuUGlVYVhoNjJPZitYN0Q4V05GeW1aU2w0Zwo=",
-      "windows": {
-        "installMode": "passive"
-      }
-    }
-  },
-  "productName": "EcoPaste",
+  "productName": "EcoPasteSync",
   "version": "../package.json"
 }

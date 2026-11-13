@@ -239,31 +239,10 @@ export interface WindowLifecycleSnapshot {
   lastActiveAgoMs: number;
 }
 
-export interface UpdateMetadata {
-  currentVersion: string;
-  version: string;
-  date: string | null;
-  body: string | null;
-  target: string;
-  downloadUrl: string;
-  downloaded: boolean;
-}
-
-export interface AppUpdateStatus {
-  currentVersion: string;
-  update: UpdateMetadata | null;
-}
-
 export interface AdminLaunchStatus {
   configured: boolean;
   runningAsAdmin: boolean;
   taskReady: boolean;
-}
-
-export interface UpdateDownloadProgress {
-  downloaded: number;
-  total: number | null;
-  progress: number | null;
 }
 
 export interface OnboardingLegacyDataDetection {
@@ -287,6 +266,60 @@ export interface OnboardingLegacyImportResult {
   imported: number;
   selectedTypes: LegacyImportSelection[];
   skipped: number;
+}
+
+export interface NearbyDevice {
+  deviceId: string;
+  name: string;
+  platform: string;
+  address: string;
+}
+
+export interface PairedDevice {
+  deviceId: string;
+  name: string;
+  platform: string;
+  allowSend: boolean;
+  allowReceive: boolean;
+  online: boolean;
+  lastSeenAt: string | null;
+  lastPullAt: string | null;
+}
+
+export interface BlockedDevice {
+  deviceId: string;
+  name: string | null;
+  platform: string | null;
+}
+
+export interface SyncState {
+  enabled: boolean;
+  deviceId: string;
+  deviceName: string;
+  port: number;
+  nearby: NearbyDevice[];
+  paired: PairedDevice[];
+  blocked: BlockedDevice[];
+}
+
+export interface SyncPairRequestPayload {
+  deviceId: string;
+  name: string;
+  platform: string;
+  /** 6 位配对验证码，需与对方设备显示的数字一致。 */
+  sas: string;
+}
+
+export interface SyncPairResultPayload {
+  deviceId: string;
+  accepted: boolean;
+  reason: string | null;
+}
+
+export interface SyncPairSasPayload {
+  deviceId: string;
+  /** 6 位配对验证码，需与对方设备显示的数字一致。 */
+  sas: string;
 }
 
 /**
@@ -476,69 +509,6 @@ export const resetSettings = async () => {
   getMessageApi().success(i18n.t("commands:messages.settingsReset"));
 
   return settings;
-};
-
-/**
- * 打开独立软件更新窗口。
- */
-export const openUpdateWindow = () => {
-  return call<void>(
-    TAURI_COMMAND.OPEN_UPDATE_WINDOW,
-    "commands:labels.openUpdateWindow",
-  );
-};
-
-/**
- * 读取当前更新状态；不触发网络请求。
- */
-export const getUpdateStatus = () => {
-  return call<AppUpdateStatus>(
-    TAURI_COMMAND.GET_UPDATE_STATUS,
-    "commands:labels.loadUpdateStatus",
-  );
-};
-
-/**
- * 手动检查更新。
- */
-export const checkForUpdates = () => {
-  return call<AppUpdateStatus>(
-    TAURI_COMMAND.CHECK_FOR_UPDATES,
-    "commands:labels.checkForUpdates",
-  );
-};
-
-/**
- * 下载并校验当前更新包，进度通过 `update://progress` 推送。
- */
-export const downloadUpdate = (version: string) => {
-  return call<UpdateMetadata>(
-    TAURI_COMMAND.DOWNLOAD_UPDATE,
-    "commands:labels.downloadUpdate",
-    { version },
-  );
-};
-
-/**
- * 安装已下载更新。Tauri updater 会按平台重启/退出当前应用。
- */
-export const installUpdate = (version: string) => {
-  return call<void>(
-    TAURI_COMMAND.INSTALL_UPDATE,
-    "commands:labels.installUpdate",
-    { version },
-  );
-};
-
-/**
- * 跳过当前发现的版本。
- */
-export const skipUpdateVersion = (version: string) => {
-  return call<AppUpdateStatus>(
-    TAURI_COMMAND.SKIP_UPDATE_VERSION,
-    "commands:labels.skipUpdateVersion",
-    { version },
-  );
 };
 
 /**
@@ -1477,4 +1447,237 @@ export const hideContextMenus = async () => {
   } catch (error) {
     log.error("hide context menus failed", toAppError(error));
   }
+};
+
+/**
+ * 拉取局域网同步状态快照：附近设备、已配对设备、黑名单与本机标识。
+ */
+export const getSyncState = () => {
+  return call<SyncState>(
+    TAURI_COMMAND.GET_SYNC_STATE,
+    "commands:labels.loadSyncState",
+  );
+};
+
+/**
+ * 向附近设备发起配对；结果经 `sync://pair-result` 事件异步返回。
+ */
+export const requestSyncPair = (deviceId: string) => {
+  return call<void>(
+    TAURI_COMMAND.REQUEST_SYNC_PAIR,
+    "commands:labels.requestPair",
+    {
+      deviceId,
+    },
+  );
+};
+
+/**
+ * 手动指定地址发起配对：适用于跨网段、自动发现不到的设备。
+ * 返回对端设备信息，配对结果仍经 `sync://pair-result` 事件异步返回。
+ */
+export const requestSyncPairByAddress = (address: string) => {
+  return call<NearbyDevice>(
+    TAURI_COMMAND.REQUEST_SYNC_PAIR_BY_ADDRESS,
+    "commands:labels.requestPairByAddress",
+    { address },
+  );
+};
+
+/**
+ * 读取最近一条待确认的配对请求；无有效请求时返回 `null`。
+ *
+ * 配对窗口由 Rust 按需创建，页面加载可能晚于 `sync://pair-request` 事件，
+ * 挂载后用它补拉当前请求。
+ */
+export const getPendingSyncPair = () => {
+  return call<SyncPairRequestPayload | null>(
+    TAURI_COMMAND.GET_PENDING_SYNC_PAIR,
+    "commands:labels.loadPendingSyncPair",
+  );
+};
+
+/**
+ * 应答收到的配对请求（接收端确认弹窗的「允许 / 拒绝」）。
+ */
+export const respondSyncPair = (deviceId: string, accept: boolean) => {
+  return call<void>(
+    TAURI_COMMAND.RESPOND_SYNC_PAIR,
+    "commands:labels.respondPair",
+    {
+      accept,
+      deviceId,
+    },
+  );
+};
+
+/**
+ * 解除配对：删除已配对设备，对端后续推送将被拒绝。
+ */
+export const removeSyncDevice = (deviceId: string) => {
+  return call<void>(
+    TAURI_COMMAND.REMOVE_SYNC_DEVICE,
+    "commands:labels.removeSyncDevice",
+    { deviceId },
+  );
+};
+
+/**
+ * 修改设备备注名。
+ */
+export const renameSyncDevice = (deviceId: string, name: string) => {
+  return call<void>(
+    TAURI_COMMAND.RENAME_SYNC_DEVICE,
+    "commands:labels.renameSyncDevice",
+    { deviceId, name },
+  );
+};
+
+/**
+ * 更新设备的发送 / 接收许可；不需要改动的字段传 `null`。
+ */
+export const setSyncDevicePermissions = (
+  deviceId: string,
+  allowSend: boolean | null,
+  allowReceive: boolean | null,
+) => {
+  return call<void>(
+    TAURI_COMMAND.SET_SYNC_DEVICE_PERMISSIONS,
+    "commands:labels.setSyncDevicePermissions",
+    { allowReceive, allowSend, deviceId },
+  );
+};
+
+/**
+ * 拉黑 / 取消拉黑设备；拉黑时 Rust 侧会连带解除配对。
+ */
+export const setSyncDeviceBlocked = (deviceId: string, blocked: boolean) => {
+  return call<void>(
+    TAURI_COMMAND.SET_SYNC_DEVICE_BLOCKED,
+    "commands:labels.setSyncDeviceBlocked",
+    { blocked, deviceId },
+  );
+};
+
+/**
+ * 手动刷新附近设备列表。
+ */
+export const refreshSyncDevices = () => {
+  return call<void>(
+    TAURI_COMMAND.REFRESH_SYNC_DEVICES,
+    "commands:labels.refreshSyncDevices",
+  );
+};
+
+/**
+ * 远端文件传输任务快照（与 Rust `TransferSnapshot` 字段一一对应）。
+ */
+export interface FileTransferSnapshot {
+  jobId: string;
+  itemId: string;
+  /** queued / running / paused / failed / done / cancelled / conflicts */
+  status: string;
+  targetDir: string;
+  fileName: string | null;
+  fileIndex: number;
+  fileCount: number;
+  transferredBytes: number;
+  totalBytes: number;
+  speedBps: number;
+  error: string | null;
+  /** 与目标目录同名的顶层路径，等待用户选择覆盖策略 */
+  conflicts: string[];
+  done: boolean;
+}
+
+/**
+ * 读取最近一次传输任务快照：传输窗口首帧加载时补齐可能错过的事件。
+ */
+export const getLatestFileTransfer = () => {
+  return call<FileTransferSnapshot | null>(
+    TAURI_COMMAND.GET_LATEST_FILE_TRANSFER,
+    "commands:labels.fileTransfer",
+  );
+};
+
+/**
+ * 按任务 id 读取快照。
+ */
+export const getFileTransferSnapshot = (jobId: string) => {
+  return call<FileTransferSnapshot | null>(
+    TAURI_COMMAND.GET_FILE_TRANSFER_SNAPSHOT,
+    "commands:labels.fileTransfer",
+    { jobId },
+  );
+};
+
+/**
+ * 暂停传输（保留临时文件，可继续）。
+ */
+export const pauseFileTransfer = (jobId: string) => {
+  return call<void>(
+    TAURI_COMMAND.PAUSE_FILE_TRANSFER,
+    "commands:labels.fileTransfer",
+    { jobId },
+  );
+};
+
+/**
+ * 继续传输（从断点续传）。
+ */
+export const resumeFileTransfer = (jobId: string) => {
+  return call<void>(
+    TAURI_COMMAND.RESUME_FILE_TRANSFER,
+    "commands:labels.fileTransfer",
+    { jobId },
+  );
+};
+
+/**
+ * 取消传输：删除临时文件并结束任务。
+ */
+export const cancelFileTransfer = (jobId: string) => {
+  return call<void>(
+    TAURI_COMMAND.CANCEL_FILE_TRANSFER,
+    "commands:labels.fileTransfer",
+    { jobId },
+  );
+};
+
+/**
+ * 解决同名冲突：`policy` 为 overwrite / skip / keepBoth / custom；
+ * custom 时 `overwrite` 列出需要覆盖的冲突路径，其余保留两者。
+ */
+export const resolveFileTransferConflicts = (
+  jobId: string,
+  policy: string,
+  overwrite?: string[],
+) => {
+  return call<void>(
+    TAURI_COMMAND.RESOLVE_FILE_TRANSFER_CONFLICTS,
+    "commands:labels.fileTransfer",
+    { jobId, overwrite, policy },
+  );
+};
+
+/**
+ * 失败后改存到其它目录。
+ */
+export const retryFileTransferToDir = (jobId: string, directory: string) => {
+  return call<void>(
+    TAURI_COMMAND.RETRY_FILE_TRANSFER_TO_DIR,
+    "commands:labels.fileTransfer",
+    { directory, jobId },
+  );
+};
+
+/**
+ * 兜底：只把远端原始路径写到剪贴板，不传输文件。
+ */
+export const copyFileTransferPaths = (jobId: string) => {
+  return call<void>(
+    TAURI_COMMAND.COPY_FILE_TRANSFER_PATHS,
+    "commands:labels.fileTransfer",
+    { jobId },
+  );
 };

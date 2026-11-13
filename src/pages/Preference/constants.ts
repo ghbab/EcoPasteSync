@@ -1,7 +1,7 @@
 /* @unocss-include */
 import type { PreferenceTabId } from "./types/preferences";
 
-export const APP_NAME_PLACEHOLDER = "EcoPaste";
+export const APP_NAME_PLACEHOLDER = "EcoPasteSync";
 
 export const STORAGE_WARNING_BYTES = 1024 * 1024 * 1024;
 export const STORAGE_ERROR_BYTES = 2 * 1024 * 1024 * 1024;
@@ -22,7 +22,7 @@ export const PREFERENCE_TAB_META: Record<PreferenceTabId, PreferenceTabMeta> = {
   },
   organize: {
     activeClass: "bg-ant-fill-secondary text-ant-text",
-    icon: "i-lucide:history",
+    icon: "i-lucide:clock-arrow-down",
   },
   record: {
     activeClass: "bg-ant-fill-secondary text-ant-text",
@@ -35,6 +35,10 @@ export const PREFERENCE_TAB_META: Record<PreferenceTabId, PreferenceTabMeta> = {
   shortcuts: {
     activeClass: "bg-ant-fill-secondary text-ant-text",
     icon: "i-lucide:keyboard",
+  },
+  sync: {
+    activeClass: "bg-ant-fill-secondary text-ant-text",
+    icon: "i-lucide:refresh-cw",
   },
   workflow: {
     activeClass: "bg-ant-fill-secondary text-ant-text",

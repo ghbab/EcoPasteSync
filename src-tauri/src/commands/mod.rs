@@ -6,11 +6,12 @@ mod backup;
 mod clipboard;
 mod context_menu;
 mod drag;
+mod file_transfer;
 mod link;
 mod onboarding;
 mod settings;
 mod storage;
-pub mod update;
+mod sync;
 mod window;
 
 // glob 再导出：`#[tauri::command]` 会在函数旁生成隐藏辅助项（`__cmd__*`），
@@ -21,9 +22,10 @@ pub use backup::*;
 pub use clipboard::*;
 pub use context_menu::*;
 pub use drag::*;
+pub use file_transfer::*;
 pub use link::*;
 pub use onboarding::*;
 pub use settings::*;
 pub use storage::*;
-pub use update::*;
+pub use sync::*;
 pub use window::*;

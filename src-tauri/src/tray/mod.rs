@@ -1,13 +1,13 @@
 //! 系统托盘：Rust 侧实现。
 //!
-//! - icon 沿用 `assets/tray.ico`（Windows）/ `assets/tray-mac.ico`（macOS），作为 Tauri 资源打包。
+//! - icon 用 `assets/tray.ico`（Windows）/ `assets/tray-mac.ico`（macOS），编译期嵌入二进制；
+//!   便携版只分发裸 exe、没有 resources 目录，编译期嵌入可保证任何分发形态都能显示托盘。
 //! - 菜单文案做 i18n，跟随 `Appearance.language` 即时切换（见 [`crate::i18n::tray`]）。
 //! - 显隐跟随 `General.tray_icon`；语言或显隐变更后由 `commands/settings.rs` 调用 [`apply`] 同步。
 
 use anyhow::Context;
 use tauri::image::Image;
 use tauri::menu::{Menu, MenuBuilder, MenuItem, PredefinedMenuItem};
-use tauri::path::BaseDirectory;
 use tauri::tray::TrayIconBuilder;
 #[cfg(target_os = "windows")]
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconEvent};
@@ -15,6 +15,7 @@ use tauri::{AppHandle, Manager};
 use tauri_plugin_opener::OpenerExt;
 
 use crate::clipboard::WatcherPause;
+use crate::core::version::display_version;
 use crate::core::Result;
 use crate::i18n::tray as tray_i18n;
 use crate::i18n::tray::Key;
@@ -24,31 +25,30 @@ use crate::window::CLIPBOARD_WINDOW_LABEL;
 use crate::window::{self, PREFERENCE_WINDOW_LABEL};
 
 const TRAY_ID: &str = "app-tray";
-const GITHUB_URL: &str = "https://github.com/EcoPasteHub/EcoPaste";
+const GITHUB_URL: &str = "https://github.com/ghbab/EcoPasteSync";
 
 const MENU_PREFERENCE: &str = "tray::preference";
 const MENU_TOGGLE_LISTEN: &str = "tray::toggle_listen";
 const MENU_OPEN_SOURCE: &str = "tray::open_source";
-const MENU_CHECK_FOR_UPDATES: &str = "tray::check_for_updates";
 const MENU_RELAUNCH: &str = "tray::relaunch";
 const MENU_EXIT: &str = "tray::exit";
 
 pub fn init(app: &AppHandle, settings: &Settings) -> Result<()> {
     let lang = settings.appearance.language;
-    let version = app.package_info().version.to_string();
+    let version = display_version();
     let paused = app
         .try_state::<WatcherPause>()
         .map(|s| s.is_paused())
         .unwrap_or(false);
 
-    let icon = load_icon(app)?;
-    let menu = build_menu(app, lang, &version, paused)?;
+    let icon = load_icon()?;
+    let menu = build_menu(app, lang, version, paused)?;
 
     let tray = TrayIconBuilder::with_id(TRAY_ID)
         .icon(icon)
         .icon_as_template(cfg!(target_os = "macos"))
         .show_menu_on_left_click(cfg!(target_os = "macos"))
-        .tooltip(format!("EcoPaste v{version}"))
+        .tooltip(format!("EcoPasteSync v{version}"))
         .menu(&menu)
         .on_menu_event(|app, event| handle_menu_event(app, event.id().as_ref()))
         .on_tray_icon_event(|tray, event| {
@@ -84,12 +84,12 @@ pub fn apply(app: &AppHandle, settings: &Settings) -> Result<()> {
     let Some(tray) = app.tray_by_id(TRAY_ID) else {
         return Ok(());
     };
-    let version = app.package_info().version.to_string();
+    let version = display_version();
     let paused = app
         .try_state::<WatcherPause>()
         .map(|s| s.is_paused())
         .unwrap_or(false);
-    let menu = build_menu(app, settings.appearance.language, &version, paused)?;
+    let menu = build_menu(app, settings.appearance.language, version, paused)?;
     tray.set_menu(Some(menu)).context("tray set_menu failed")?;
     tray.set_visible(settings.general.tray_icon)
         .context("tray set_visible failed")?;
@@ -105,27 +105,24 @@ fn rebuild_menu(app: &AppHandle) -> Result<()> {
         .try_state::<crate::settings::SettingsStore>()
         .map(|s| s.snapshot().appearance.language)
         .unwrap_or_default();
-    let version = app.package_info().version.to_string();
+    let version = display_version();
     let paused = app
         .try_state::<WatcherPause>()
         .map(|s| s.is_paused())
         .unwrap_or(false);
-    let menu = build_menu(app, lang, &version, paused)?;
+    let menu = build_menu(app, lang, version, paused)?;
     tray.set_menu(Some(menu)).context("tray set_menu failed")?;
     Ok(())
 }
 
-fn load_icon(app: &AppHandle) -> Result<Image<'static>> {
-    let relative = if cfg!(target_os = "macos") {
-        "assets/tray-mac.ico"
-    } else {
-        "assets/tray.ico"
-    };
-    let path = app
-        .path()
-        .resolve(relative, BaseDirectory::Resource)
-        .with_context(|| format!("resolve tray icon resource {relative}"))?;
-    Ok(Image::from_path(&path).with_context(|| format!("load tray icon from {path:?}"))?)
+/// 编译期嵌入托盘图标，避免依赖安装目录下的 resources 文件。
+fn load_icon() -> Result<Image<'static>> {
+    #[cfg(target_os = "macos")]
+    const TRAY_ICON: &[u8] = include_bytes!("../../assets/tray-mac.ico");
+    #[cfg(target_os = "windows")]
+    const TRAY_ICON: &[u8] = include_bytes!("../../assets/tray.ico");
+
+    Ok(Image::from_bytes(TRAY_ICON).context("decode tray icon")?)
 }
 
 fn build_menu(
@@ -165,14 +162,6 @@ fn build_menu(
         None::<&str>,
     )
     .context("build open_source menu item")?;
-    let check_for_updates = MenuItem::with_id(
-        app,
-        MENU_CHECK_FOR_UPDATES,
-        tray_i18n::label(lang, Key::CheckForUpdates),
-        true,
-        None::<&str>,
-    )
-    .context("build check_for_updates menu item")?;
     let version_item = MenuItem::with_id(
         app,
         "tray::version",
@@ -206,7 +195,6 @@ fn build_menu(
             &toggle_listen,
             &sep1,
             &open_source,
-            &check_for_updates,
             &sep2,
             &version_item,
             &relaunch,
@@ -237,11 +225,6 @@ fn handle_menu_event(app: &AppHandle, id: &str) {
         MENU_OPEN_SOURCE => {
             if let Err(err) = app.opener().open_url(GITHUB_URL, None::<&str>) {
                 log::error!("tray open url failed: {err:?}");
-            }
-        }
-        MENU_CHECK_FOR_UPDATES => {
-            if let Err(err) = window::show_window(app, window::UPDATE_WINDOW_LABEL) {
-                log::error!("tray open update window failed: {err:?}");
             }
         }
         MENU_RELAUNCH => app.restart(),

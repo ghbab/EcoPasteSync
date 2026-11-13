@@ -66,14 +66,14 @@ mod tests {
 
     #[test]
     fn detects_autostart_launch_argument() {
-        let args = vec!["EcoPaste.exe".to_owned(), "--auto-launch".to_owned()];
+        let args = vec!["EcoPasteSync.exe".to_owned(), "--auto-launch".to_owned()];
 
         assert!(is_autostart_launch(&args));
     }
 
     #[test]
     fn rejects_regular_launch_arguments() {
-        let args = vec!["EcoPaste.exe".to_owned()];
+        let args = vec!["EcoPasteSync.exe".to_owned()];
 
         assert!(!is_autostart_launch(&args));
     }

@@ -1,15 +1,14 @@
 {
   "about": {
-    "checkUpdates": "Check for updates",
     "sponsor": "Sponsor",
-    "sponsorHint": "If EcoPaste helps your workflow, you can support the project.",
+    "sponsorHint": "If EcoPasteSync helps your workflow, you can support the project.",
     "sponsorQrAlt": "Sponsor QR code"
   },
   "backup": {
     "export": {
       "confirmPassword": "Confirm password",
       "confirmRequired": "Enter the backup password again",
-      "encryptedHint": "The backup will be encrypted with this password. EcoPaste will not save it, and forgotten passwords cannot be recovered.",
+      "encryptedHint": "The backup will be encrypted with this password. EcoPasteSync will not save it, and forgotten passwords cannot be recovered.",
       "modeEncrypted": "Encrypted backup (Recommended)",
       "modePlain": "Plain backup",
       "ok": "Choose Save Location",
@@ -23,11 +22,11 @@
       "plainConfirmRequired": "Confirm the plain backup risk",
       "plainWarning": "Anyone with the file can read the backup contents directly.",
       "plainWarningTitle": "Plain backups are not password protected",
-      "title": "Export EcoPaste Backup"
+      "title": "Export EcoPasteSync Backup"
     },
-    "fileFilter": "EcoPaste Backup",
+    "fileFilter": "EcoPasteSync Backup",
     "import": {
-      "fileFallback": "EcoPaste backup file",
+      "fileFallback": "EcoPasteSync backup file",
       "ok": "Import",
       "overwriteConfirm": "I have read the warning and confirm overwriting current data",
       "overwriteConfirmRequired": "Confirm the overwrite import risk",
@@ -36,11 +35,11 @@
       "overwriteWarning": "Overwrite import replaces the selected current data immediately. Merge import is safer for everyday recovery; use overwrite only when the backup should become the source of truth.",
       "password": "Backup password",
       "passwordRequired": "Enter the backup password",
-      "pickTitle": "Choose EcoPaste Backup",
+      "pickTitle": "Choose EcoPasteSync Backup",
       "strategy": "Import mode",
       "strategyMerge": "Merge Import",
       "strategyOverwrite": "Overwrite Import",
-      "title": "Import EcoPaste Backup",
+      "title": "Import EcoPasteSync Backup",
       "typeEncrypted": "Encrypted backup, password required",
       "typePlain": "Unencrypted backup"
     },
@@ -84,7 +83,7 @@
         "title": "Appearance & Language"
       },
       "backup": {
-        "description": "Export or import EcoPaste backup packages.",
+        "description": "Export or import EcoPasteSync backup packages.",
         "title": "Backup & Migration"
       },
       "capture": {
@@ -132,8 +131,11 @@
       "source": {
         "title": "App Filters"
       },
-      "updates": {
-        "title": "Updates"
+      "syncDevices": {
+        "title": "Device Management"
+      },
+      "syncGeneral": {
+        "title": "General"
       },
       "window": {
         "title": "Clipboard Window"
@@ -141,17 +143,12 @@
     },
     "settings": {
       "about": {
-        "checkUpdates": {
-          "controlLabel": "Check",
-          "description": "Check whether a new EcoPaste version is available.",
-          "title": "Check for Updates"
-        },
         "github": {
           "controlLabel": "Open",
           "title": "GitHub"
         },
         "sponsor": {
-          "description": "If EcoPaste helps your workflow, you can support the project.",
+          "description": "If EcoPasteSync helps your workflow, you can support the project.",
           "title": "Sponsor"
         }
       },
@@ -196,7 +193,7 @@
           "title": "Maximum Image Height"
         },
         "language": {
-          "description": "Switch the EcoPaste interface language.",
+          "description": "Switch the EcoPasteSync interface language.",
           "options": {
             "en-US": "English",
             "zh-CN": "简体中文"
@@ -270,26 +267,26 @@
       },
       "control": {
         "autoStart": {
-          "description": "Start EcoPaste automatically after logging in.",
+          "description": "Start EcoPasteSync automatically after logging in.",
           "macos": {
-            "description": "Start EcoPaste automatically after login.",
+            "description": "Start EcoPasteSync automatically after login.",
             "title": "Launch at Login"
           },
           "title": "Launch at Login",
           "windows": {
-            "description": "Start EcoPaste automatically after login.",
+            "description": "Start EcoPasteSync automatically after login.",
             "title": "Launch at Startup"
           }
         },
         "dockIcon": {
-          "description": "Show the EcoPaste icon in the system desktop bar.",
+          "description": "Show the EcoPasteSync icon in the system desktop bar.",
           "macos": {
-            "description": "Show the EcoPaste icon in the Dock.",
+            "description": "Show the EcoPasteSync icon in the Dock.",
             "title": "Dock Icon"
           },
           "title": "Desktop Bar Icon",
           "windows": {
-            "description": "Show the EcoPaste icon in the taskbar.",
+            "description": "Show the EcoPasteSync icon in the taskbar.",
             "title": "Taskbar Icon"
           }
         },
@@ -299,14 +296,14 @@
           "title": "Reopen Onboarding"
         },
         "trayIcon": {
-          "description": "Show the EcoPaste icon in the system status area.",
+          "description": "Show the EcoPasteSync icon in the system status area.",
           "macos": {
-            "description": "Show the EcoPaste icon in the menu bar.",
+            "description": "Show the EcoPasteSync icon in the menu bar.",
             "title": "Menu Bar Icon"
           },
           "title": "Status Area Icon",
           "windows": {
-            "description": "Show the EcoPaste icon in the system tray.",
+            "description": "Show the EcoPasteSync icon in the system tray.",
             "title": "System Tray Icon"
           }
         }
@@ -378,8 +375,7 @@
             "contextSubmenu": "Context Submenu Window",
             "onboarding": "Onboarding Window",
             "preference": "Preferences Window",
-            "preview": "Clipboard Preview Window",
-            "update": "Software Update Window"
+            "preview": "Clipboard Preview Window"
           }
         }
       },
@@ -465,7 +461,7 @@
           "title": "Accessibility Permission"
         },
         "adminRestartConfirm": {
-          "content": "EcoPaste needs to restart with administrator privileges for this change to take effect. Windows may show a User Account Control prompt.",
+          "content": "EcoPasteSync needs to restart with administrator privileges for this change to take effect. Windows may show a User Account Control prompt.",
           "ok": "Restart",
           "title": "Restart required"
         },
@@ -474,7 +470,7 @@
           "title": "Full Disk Access Permission"
         },
         "runAsAdministrator": {
-          "description": "Used to restart EcoPaste with administrator privileges and keep future launches elevated when needed.",
+          "description": "Used to restart EcoPasteSync with administrator privileges and keep future launches elevated when needed.",
           "title": "Run as Administrator"
         }
       },
@@ -538,7 +534,7 @@
           "title": "Open Preferences Window"
         },
         "winV": {
-          "description": "Press Win+V to summon EcoPaste instead of the Windows clipboard history panel.",
+          "description": "Press Win+V to summon EcoPasteSync instead of the Windows clipboard history panel.",
           "title": "Take Over Win+V"
         }
       },
@@ -558,27 +554,85 @@
           "title": "Ignored Apps"
         }
       },
-      "updates": {
-        "autoCheck": {
-          "description": "Periodically check whether a new EcoPaste version is available.",
-          "title": "Automatically Check for Updates"
+      "sync": {
+        "deviceName": {
+          "description": "Device name shown to other devices on the LAN.",
+          "placeholder": "Uses the hostname when left empty",
+          "title": "Device Name"
         },
-        "beta": {
-          "description": "Receive beta test versions when checking for updates.",
-          "title": "Receive Beta Updates"
-        },
-        "frequency": {
-          "description": "Set how often EcoPaste checks for updates.",
-          "options": {
-            "daily": "Daily",
-            "monthly": "Monthly",
-            "weekly": "Weekly"
+        "devices": {
+          "blockedTitle": "Ignored Devices",
+          "description": "Manage nearby, paired, and ignored devices.",
+          "disabledHint": "Nearby devices will appear here once LAN sync is enabled",
+          "emptyBlocked": "No ignored devices",
+          "emptyNearby": "No nearby devices",
+          "emptyPaired": "No paired devices",
+          "localDeviceName": "This device: {{name}}",
+          "manualPairHint": "Enter the peer IP (port optional) to start pairing.",
+          "manualPairPlaceholder": "192.168.1.20:47654",
+          "manualPairSubmit": "Pair",
+          "manualPairTitle": "Pair Manually",
+          "manualPairWaiting": "Waiting for confirmation…",
+          "nearbyTitle": "Nearby Devices",
+          "offline": "Offline",
+          "online": "Online",
+          "pair": "Pair",
+          "pairedTitle": "Paired Devices",
+          "pairFailed": {
+            "device-offline": "Device is offline",
+            "internal-error": "Internal error",
+            "network-error": "Network error",
+            "pair-rejected": "The other device rejected the pairing request",
+            "timeout": "Pairing timed out"
           },
-          "title": "Update Check Frequency"
+          "pairRequestAccept": "Allow",
+          "pairRequestContent": "Device \"{{name}}\" ({{platform}}) wants to sync the clipboard with this device",
+          "pairRequestReject": "Reject",
+          "pairRequestSasHint": "If the code below matches the one shown on the other device, click \"Allow\":",
+          "pairRequestTitle": "Pairing Request",
+          "pairSasHint": "Make sure this code matches the one shown on the other device:",
+          "pairSasTitle": "Pairing Code",
+          "pairSuccess": "Paired successfully",
+          "receive": "Receive",
+          "refresh": "Refresh nearby devices",
+          "rename": "Rename",
+          "send": "Send",
+          "title": "Device Management",
+          "unblock": "Unignore",
+          "unpair": "Unpair",
+          "unpairConfirm": "After unpairing, this device will no longer be able to sync the clipboard with this device."
         },
-        "nightly": {
-          "description": "Receive nightly versions when checking for updates.",
-          "title": "Receive Nightly Updates"
+        "discoverable": {
+          "description": "When off, this device is hidden from nearby lists and rejects new pairing requests. Paired devices keep syncing normally.",
+          "title": "Allow Discovery"
+        },
+        "enabled": {
+          "description": "Pair with EcoPasteSync devices on the same LAN and sync the clipboard.",
+          "title": "Enable LAN Sync"
+        },
+        "fileMaxSize": {
+          "description": "Records whose files add up to more than this are never transferred; only their paths are synced.",
+          "title": "File Transfer Limit"
+        },
+        "fileThreshold": {
+          "description": "Records whose files add up to this size are transferred with their content. Larger ones sync the path only and are fetched when you paste.",
+          "title": "Direct Transfer Limit"
+        },
+        "port": {
+          "description": "Port used by the sync service; later ports are tried when occupied.",
+          "title": "Sync Port"
+        },
+        "syncFiles": {
+          "description": "File entries join LAN sync; the file bodies are transferred on demand when pasting.",
+          "title": "Sync Files"
+        },
+        "syncImage": {
+          "description": "Images join LAN sync.",
+          "title": "Sync Images"
+        },
+        "syncText": {
+          "description": "Text content (links, HTML, RTF) joins LAN sync.",
+          "title": "Sync Text"
         }
       },
       "window": {
@@ -653,6 +707,9 @@
       "shortcuts": {
         "title": "Shortcuts"
       },
+      "sync": {
+        "title": "Sync"
+      },
       "workflow": {
         "title": "Interface"
       }
@@ -679,7 +736,7 @@
     "open": "Open data directory",
     "pickTitle": "Choose New Data Directory Location",
     "reset": "Reset to default directory",
-    "resetConfirmContent": "EcoPaste will move the current history database, settings, and resource cache back to the default data directory, then delete the current custom data directory after migration succeeds.",
+    "resetConfirmContent": "EcoPasteSync will move the current history database, settings, and resource cache back to the default data directory, then delete the current custom data directory after migration succeeds.",
     "resetConfirmTitle": "Reset Data Directory"
   }
 }

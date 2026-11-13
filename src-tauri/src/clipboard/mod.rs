@@ -12,7 +12,7 @@ mod secrets;
 mod sound;
 mod source;
 mod storage;
-mod watcher;
+pub(crate) mod watcher;
 mod write;
 
 pub use app_store::AppIconStore;

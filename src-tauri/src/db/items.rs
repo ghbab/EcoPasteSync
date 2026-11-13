@@ -1,6 +1,6 @@
 use anyhow::Context;
 use blake3::Hasher;
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use sqlx::{QueryBuilder, Sqlite, SqlitePool};
 
 use crate::core::Result;
@@ -10,7 +10,7 @@ use crate::db::models::{
 
 const SELECT_ITEM: &str = "SELECT id, kind, sub_kind, group_id, source_app_id, content, \
      content_hash, search_text, summary, file_types, size, width, height, use_count, is_favorite, is_pinned, \
-     is_sensitive, platform, note, created_at, updated_at FROM clipboard_items";
+     is_sensitive, platform, NULL AS sync_source_device_id, note, created_at, updated_at FROM clipboard_items";
 
 /// 列表/单条刷新场景的精简 SELECT：text 类型条目的 `content` 与 `search_text` 一律置空，
 /// 由前端用 `summary` 渲染。HTML/RTF/长纯文本可能很大（用户复制整段文档），
@@ -28,7 +28,7 @@ const LIST_SELECT_ITEM: &str = "SELECT clipboard_items.id, clipboard_items.kind,
      clipboard_items.width, clipboard_items.height, clipboard_items.use_count, \
      clipboard_items.is_favorite, clipboard_items.is_pinned, \
      clipboard_items.is_sensitive, \
-     clipboard_items.platform, clipboard_items.note, \
+     clipboard_items.platform, NULL AS sync_source_device_id, clipboard_items.note, \
      clipboard_items.created_at, clipboard_items.updated_at, \
      clipboard_apps.name AS source_app_name, \
      clipboard_apps.icon_file AS source_app_icon_file \
@@ -61,6 +61,29 @@ fn kind_tag(kind: ClipboardKind) -> &'static str {
         ClipboardKind::Image => "image",
         ClipboardKind::Files => "files",
     }
+}
+
+/// 把指定内容哈希的 files 条目提到列表最前（更新创建时间与更新时间）。
+///
+/// 对端重复复制同一批文件时会发来置顶通知；本地没有该条目时返回 `None`，
+/// 属于正常情况（例如条目已被用户清理）。
+pub async fn bump_files_item(pool: &SqlitePool, content_hash: &str) -> Result<Option<String>> {
+    let now = Utc::now();
+    let row = sqlx::query_as::<_, (String,)>(
+        "UPDATE clipboard_items SET created_at = ?, updated_at = ? \
+         WHERE id = (SELECT id FROM clipboard_items \
+                     WHERE content_hash = ? AND kind = 'files' \
+                     ORDER BY created_at DESC LIMIT 1) \
+         RETURNING id",
+    )
+    .bind(now)
+    .bind(now)
+    .bind(content_hash)
+    .fetch_optional(pool)
+    .await
+    .context("failed to bump clipboard item")?;
+
+    Ok(row.map(|(id,)| id))
 }
 
 /// 入库主入口：按 `item.content_hash` 去重。
@@ -100,13 +123,34 @@ pub async fn find_item_by_content_hash(
     Ok(item)
 }
 
+/// 同步 pull 场景：返回 `since` 之后（未指定则最近 `limit` 条）的完整条目，按时间升序。
+/// 与列表精简查询不同，这里必须带全量 `content` / `search_text`（对端要完整入库）。
+pub async fn list_recent_items_for_sync(
+    pool: &SqlitePool,
+    since: Option<DateTime<Utc>>,
+    limit: i64,
+) -> Result<Vec<ClipboardItem>> {
+    let mut qb: QueryBuilder<Sqlite> = QueryBuilder::new(SELECT_ITEM);
+    if let Some(since) = since {
+        qb.push(" WHERE created_at > ").push_bind(since);
+    }
+    qb.push(" ORDER BY created_at DESC LIMIT ").push_bind(limit);
+
+    let rows = qb
+        .build_query_as::<ClipboardItem>()
+        .fetch_all(pool)
+        .await
+        .context("failed to list recent clipboard items for sync")?;
+    Ok(rows.into_iter().rev().collect())
+}
+
 /// 插入一条剪贴板记录（不做去重；去重请走 [`upsert_item`]）。
 pub async fn insert_item(pool: &SqlitePool, item: &ClipboardItem) -> Result<()> {
     sqlx::query(
         "INSERT INTO clipboard_items \
          (id, kind, sub_kind, group_id, source_app_id, content, content_hash, search_text, \
-          summary, file_types, size, width, height, use_count, is_favorite, is_pinned, is_sensitive, platform, note, \
-          created_at, updated_at) \
+          summary, file_types, size, width, height, use_count, is_favorite, is_pinned, is_sensitive, platform, \
+          note, created_at, updated_at) \
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(item.id.as_str())
@@ -589,6 +633,7 @@ mod tests {
             is_pinned: false,
             is_sensitive: false,
             platform: Platform::Macos,
+            sync_source_device_id: None,
             note: None,
             created_at: ts,
             updated_at: ts,

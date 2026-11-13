@@ -221,7 +221,7 @@ pub fn validate_storage_target(data_dir: &Path) -> Result<()> {
             return Ok(());
         }
 
-        return Err(anyhow::anyhow!("目标目录不是当前环境的 EcoPaste 数据目录").into());
+        return Err(anyhow::anyhow!("目标目录不是当前环境的 EcoPasteSync 数据目录").into());
     }
 
     if data_dir.exists()
@@ -230,7 +230,7 @@ pub fn validate_storage_target(data_dir: &Path) -> Result<()> {
             .next()
             .is_some()
     {
-        return Err(anyhow::anyhow!("目标 EcoPaste 数据目录已存在且不是有效数据目录").into());
+        return Err(anyhow::anyhow!("目标 EcoPasteSync 数据目录已存在且不是有效数据目录").into());
     }
 
     Ok(())

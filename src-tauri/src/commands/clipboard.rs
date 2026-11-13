@@ -381,7 +381,17 @@ pub async fn write_to_clipboard(
         should_write_plain_for_copy(plain, item.kind, settings.clipboard.content.copy_plain);
     let hide_after_copy = settings.clipboard.content.copy_then_hide_window;
 
-    crate::clipboard::write_to_clipboard(&store, guard.inner().as_ref(), &item, write_plain)?;
+    // 远端 files 条目：复制按钮不传输文件，只把远端原始路径作为文本写入剪贴板。
+    // 本机条目维持原有行为（文件条目写 CF_HDROP / file URL）。
+    let remote_files = crate::sync::file_transfer::remote_device_of(&app, &item)
+        .await?
+        .is_some();
+
+    if remote_files {
+        crate::clipboard::write_to_clipboard(&store, guard.inner().as_ref(), &item, true)?;
+    } else {
+        crate::clipboard::write_to_clipboard(&store, guard.inner().as_ref(), &item, write_plain)?;
+    }
     mark_item_reused_if_enabled(&app, &pool, &id, item.kind).await?;
 
     if hide_after_copy {
@@ -420,7 +430,38 @@ pub async fn paste_clipboard_item(
         settings.clipboard.content.paste_files_as_path,
     );
 
-    crate::clipboard::write_to_clipboard(&store, guard.inner().as_ref(), &item, write_plain)?;
+    // 远端 files 条目：
+    // - 前台是资源管理器 → 记录其当前目录，直接把文件传输过去，不模拟 Ctrl+V；
+    // - 其它窗口（或用户选择「粘贴为路径」）→ 降级为写远端原始路径文本，再模拟粘贴。
+    let remote_files = crate::sync::file_transfer::remote_device_of(&app, &item)
+        .await?
+        .is_some();
+
+    if remote_files && !write_plain {
+        if let Some(directory) = crate::window::foreground::explorer_directory() {
+            crate::sync::file_transfer::start_paste_transfer(&app, &item, directory).await?;
+            mark_item_reused_if_enabled(&app, &pool, &id, item.kind).await?;
+
+            // 文件已直接落盘，不需要再向目标窗口发送按键；只负责把剪贴板面板收起。
+            if window::is_clipboard_window_pinned() {
+                #[cfg(target_os = "macos")]
+                if let Err(err) = window::macos::resign_clipboard_panel_key(&app) {
+                    log::warn!("resign clipboard panel key before transfer failed: {err:?}");
+                }
+            } else if let Err(err) = window::hide_window(&app, CLIPBOARD_WINDOW_LABEL) {
+                log::warn!("hide clipboard window before transfer failed: {err:?}");
+            }
+
+            return Ok(());
+        }
+    }
+
+    if remote_files {
+        // 降级：只写远端原始路径文本（本机可能不存在该路径，用户已知并接受）。
+        crate::clipboard::write_to_clipboard(&store, guard.inner().as_ref(), &item, true)?;
+    } else {
+        crate::clipboard::write_to_clipboard(&store, guard.inner().as_ref(), &item, write_plain)?;
+    }
     mark_item_reused_if_enabled(&app, &pool, &id, item.kind).await?;
 
     if window::is_clipboard_window_pinned() {
@@ -532,10 +573,20 @@ pub async fn list_clipboard_items(
     let settings = app.state::<SettingsStore>().snapshot();
     let file_entry_limit = settings.clipboard.display.file_entry_limit();
     let redact_sensitive = settings.clipboard.sensitive.redact_secrets;
+
+    // 来源设备在独立同步库：一次批量查询，避免逐条访问。
+    let sync_pool = crate::sync::devices::pool(&app).await;
+    let item_ids: Vec<String> = items.iter().map(|item| item.id.clone()).collect();
+    let remote_sources = crate::sync::item_meta::sources_for(&sync_pool, &item_ids)
+        .await
+        .unwrap_or_default();
+
     for item in &mut items {
+        let remote = remote_sources.contains_key(&item.id);
+
         attach_image_thumbnail_path(&image_store, item).await?;
         attach_source_app_icon_path(&app_icon_store, item);
-        attach_file_entries(&pool, &file_icon_store, item, file_entry_limit).await?;
+        attach_file_entries(&pool, &file_icon_store, item, file_entry_limit, remote).await?;
         attach_color_preview(item);
         attach_display_created_at(item, &now);
         redact_sensitive_list_item(item, redact_sensitive);
@@ -569,9 +620,16 @@ pub async fn get_clipboard_item(
         let settings = app.state::<SettingsStore>().snapshot();
         let file_entry_limit = settings.clipboard.display.file_entry_limit();
         let redact_sensitive = settings.clipboard.sensitive.redact_secrets;
+
+        let sync_pool = crate::sync::devices::pool(&app).await;
+        let remote = crate::sync::item_meta::source_of(&sync_pool, &id)
+            .await
+            .unwrap_or(None)
+            .is_some();
+
         attach_image_thumbnail_path(&image_store, item).await?;
         attach_source_app_icon_path(&app_icon_store, item);
-        attach_file_entries(&pool, &file_icon_store, item, file_entry_limit).await?;
+        attach_file_entries(&pool, &file_icon_store, item, file_entry_limit, remote).await?;
         attach_color_preview(item);
         attach_display_created_at(item, &Local::now());
         redact_sensitive_list_item(item, redact_sensitive);
@@ -806,12 +864,14 @@ impl Drop for ClipboardAutoHideSuspendGuard {
 
 /// 为 files 条目按设置组装前若干项 [`FileEntry`]：
 /// 路径 / 文件名 / 目录标记 / 图片标记 / icon 绝对路径，前端直接渲染。
+/// `remote` 来自独立同步库的来源记录：远端条目的文件尚未落到本机，前端据此展示下载态。
 /// 非 files 条目或无路径时保持 `file_entries = None`。
 async fn attach_file_entries(
     pool: &SqlitePool,
     store: &FileIconStore,
     item: &mut ClipboardItem,
     limit: usize,
+    remote: bool,
 ) -> Result<()> {
     if item.kind != ClipboardKind::Files {
         return Ok(());
@@ -852,6 +912,7 @@ async fn attach_file_entries(
             is_dir,
             is_image,
             exists,
+            remote,
             icon_path,
         });
     }
@@ -1344,6 +1405,7 @@ pub async fn toggle_clipboard_item_pinned(
 #[tauri::command]
 pub async fn delete_clipboard_item(
     db: State<'_, DatabaseState>,
+    sync_db: State<'_, crate::db::SyncDatabaseState>,
     store: State<'_, ImageStore>,
     id: String,
 ) -> Result<()> {
@@ -1353,6 +1415,13 @@ pub async fn delete_clipboard_item(
             log::warn!("remove deleted image {file_name} failed: {err}");
         }
     }
+
+    // 来源记录在独立同步库：条目已删除，顺手清理；失败只记日志，不影响删除结果。
+    let sync_pool = sync_db.pool().await;
+    if let Err(err) = crate::sync::item_meta::remove_for_item(&sync_pool, &id).await {
+        log::warn!("remove sync item meta for {id} failed: {err}");
+    }
+
     Ok(())
 }
 
@@ -1361,12 +1430,22 @@ pub async fn delete_clipboard_item(
 pub async fn clear_clipboard_items(
     app: AppHandle,
     db: State<'_, DatabaseState>,
+    sync_db: State<'_, crate::db::SyncDatabaseState>,
     store: State<'_, ImageStore>,
     delete_favorites: bool,
     delete_pinned: bool,
 ) -> Result<u64> {
     let pool = db.pool().await;
     let outcome = clear_items(&pool, delete_favorites, delete_pinned).await?;
+
+    // 完整清空（收藏与置顶也删）时来源记录全部失效；部分清空保留可能仍存在的条目，
+    // 残余孤儿记录不影响功能，只是占用少量空间。
+    if delete_favorites && delete_pinned {
+        let sync_pool = sync_db.pool().await;
+        if let Err(err) = crate::sync::item_meta::clear(&sync_pool).await {
+            log::warn!("clear sync item meta failed: {err}");
+        }
+    }
 
     for file_name in &outcome.image_files {
         if let Err(err) = store.remove(file_name) {
@@ -1568,6 +1647,7 @@ mod tests {
             is_pinned: false,
             is_sensitive,
             platform: Platform::Macos,
+            sync_source_device_id: None,
             note: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),

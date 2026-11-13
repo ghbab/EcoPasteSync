@@ -25,6 +25,7 @@ pub enum CommandKey {
     DragImageMissing,
     DragTextEmpty,
     ExternalUrlUnsupported,
+    SyncDisabled,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -33,7 +34,6 @@ pub enum TrayKey {
     StartListening,
     StopListening,
     OpenSourceAddress,
-    CheckForUpdates,
     Version,
     Relaunch,
     Exit,

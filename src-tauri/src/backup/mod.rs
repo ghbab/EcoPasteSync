@@ -521,7 +521,7 @@ fn build_manifest(
     Ok(BackupManifest {
         format_version: FORMAT_VERSION,
         app_name: app.package_info().name.to_string(),
-        app_version: app.package_info().version.to_string(),
+        app_version: crate::core::version::display_version().to_owned(),
         exported_at,
         platform: current_platform().to_owned(),
         encryption: match mode {
@@ -830,7 +830,7 @@ fn read_backup_payload(path: &Path, password: Option<&str>) -> Result<Vec<u8>> {
         return Ok(bytes);
     }
     if !bytes.starts_with(MAGIC) {
-        return app_error("不是有效的 EcoPaste 备份文件");
+        return app_error("不是有效的 EcoPasteSync 备份文件");
     }
 
     let mut cursor = Cursor::new(bytes.as_slice());
@@ -928,7 +928,7 @@ fn inspect_backup_reader<R: Read>(reader: &mut R) -> Result<BackupContainerMode>
         return Ok(BackupContainerMode::Plain);
     }
 
-    app_error("不是有效的 EcoPaste 备份文件")
+    app_error("不是有效的 EcoPasteSync 备份文件")
 }
 
 fn read_container_header_after_magic<R: Read>(reader: &mut R) -> Result<ContainerHeader> {
@@ -1000,7 +1000,18 @@ async fn overwrite_import(
         let db_src = db_src.clone();
         async move {
             replace_live_database(&app, &db_src)?;
-            crate::db::init(&app).await
+
+            // 备份库可能来自旧版 fork（主库里带 fork 表与 migration 记录）：
+            // 先拆分到同步库，再按上游版本应用主库 migration。
+            let pool = crate::db::init::open(&app).await?;
+            let sync_pool = app.state::<crate::db::SyncDatabaseState>().pool().await;
+            crate::db::sync_db::migrate_legacy(&pool, &sync_pool).await?;
+            crate::db::init::migrate(&pool).await?;
+
+            // 主库已被整体替换，旧条目的来源标记全部失效，清空避免误判。
+            crate::sync::item_meta::clear(&sync_pool).await?;
+
+            Ok(pool)
         }
     })
     .await?;
@@ -1604,6 +1615,7 @@ mod tests {
             is_pinned: false,
             is_sensitive: true,
             platform: Platform::Macos,
+            sync_source_device_id: None,
             note: None,
             created_at: ts,
             updated_at: ts,

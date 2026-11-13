@@ -15,6 +15,9 @@ static PRE_EDIT_FOREGROUND_HWND: Mutex<Option<isize>> = Mutex::new(None);
 pub fn show_window(app_handle: &AppHandle, label: &str) -> Result<()> {
     let window = get_window(app_handle, label)?;
     if label == CLIPBOARD_WINDOW_LABEL {
+        // 记住面板显示前的外部前台窗口：后续搜索框聚焦会让面板临时成为前台，
+        // 粘贴文件时需要回退到它来定位资源管理器目录。
+        super::foreground::remember_external_foreground();
         window
             .set_focusable(false)
             .map_err(|e| anyhow::anyhow!(e))?;
@@ -84,6 +87,9 @@ pub fn hide_window(app_handle: &AppHandle, label: &str) -> Result<()> {
 }
 
 fn remember_pre_edit_foreground(clipboard_hwnd: HWND) {
+    // 进入编辑态前同样记录一次外部前台窗口，覆盖「面板已显示后才点搜索框」的场景。
+    super::foreground::remember_external_foreground();
+
     let mut guard = PRE_EDIT_FOREGROUND_HWND
         .lock()
         .expect("pre edit foreground hwnd poisoned");

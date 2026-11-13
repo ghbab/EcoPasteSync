@@ -512,7 +512,7 @@ const Group: FC = () => {
           type="button"
         >
           <KeyHint hintKey="N" onKeyPress={handleCreateGroupAction}>
-            <i aria-hidden className="i-lucide:more-horizontal text-sm!" />
+            <i aria-hidden className="i-lucide:ellipsis text-sm!" />
           </KeyHint>
         </button>
       </Dropdown>

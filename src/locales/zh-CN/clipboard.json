@@ -23,6 +23,9 @@
     "searchGroupFavorites": "「{{group}}」分组下的收藏中未找到与「{{keyword}}」相关的记录",
     "searchHistory": "未找到「{{keyword}}」相关记录"
   },
+  "files": {
+    "remoteSource": "来自远端设备，粘贴时自动传输"
+  },
   "footer": {
     "shortcuts": "快捷键",
     "total": "共 {{count}} 项"
@@ -52,7 +55,7 @@
   },
   "header": {
     "clearRecords": "清空记录",
-    "logoAlt": "EcoPaste 标志",
+    "logoAlt": "EcoPasteSync 标志",
     "moreActions": "更多操作",
     "openPreference": "偏好设置",
     "pin": "固定窗口",

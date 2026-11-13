@@ -153,7 +153,7 @@ export const preferenceTabs: PreferenceTab[] = [
     ],
   },
   {
-    icon: "i-lucide:history",
+    icon: "i-lucide:clock-arrow-down",
     id: "organize",
     sections: [
       {
@@ -818,55 +818,144 @@ export const preferenceTabs: PreferenceTab[] = [
           },
         ],
       },
+    ],
+  },
+  {
+    icon: "i-lucide:refresh-cw",
+    id: "sync",
+    sections: [
       {
-        id: "updates",
+        id: "syncGeneral",
         settings: [
           {
             control: { type: "switch" },
-            id: "updates.autoCheck",
-            keywords: ["update", "version"],
-            path: ["update", "autoCheck"],
+            id: "sync.enabled",
+            keywords: ["sync", "lan", "network", "device", "pair"],
+            path: ["sync", "enabled"],
             value: (settings) => {
-              return settings.update.autoCheck;
+              return settings.sync.enabled;
             },
           },
           {
-            control: {
-              options: [
-                { value: "daily" },
-                { value: "weekly" },
-                { value: "monthly" },
-              ],
-              type: "segmented",
-            },
+            control: { type: "switch" },
             disabledWhen: (settings) => {
-              return !settings.update.autoCheck;
+              return !settings.sync.enabled;
             },
-            id: "updates.frequency",
-            keywords: ["update", "frequency", "schedule"],
-            parentId: "updates.autoCheck",
-            path: ["update", "frequency"],
+            id: "sync.discoverable",
+            keywords: ["sync", "discover", "nearby", "mdns", "visible", "pair"],
+            parentId: "sync.enabled",
+            path: ["sync", "discoverable"],
             value: (settings) => {
-              return settings.update.frequency;
+              return settings.sync.discoverable;
+            },
+          },
+          {
+            control: { type: "text" },
+            disabledWhen: (settings) => {
+              return !settings.sync.enabled;
+            },
+            id: "sync.deviceName",
+            keywords: ["sync", "device", "name", "hostname"],
+            parentId: "sync.enabled",
+            path: ["sync", "deviceName"],
+            value: (settings) => {
+              return settings.sync.deviceName;
+            },
+          },
+          {
+            control: { max: 65535, min: 1024, type: "number" },
+            disabledWhen: (settings) => {
+              return !settings.sync.enabled;
+            },
+            id: "sync.port",
+            keywords: ["sync", "port", "network", "lan"],
+            parentId: "sync.enabled",
+            path: ["sync", "port"],
+            value: (settings) => {
+              return settings.sync.port;
             },
           },
           {
             control: { type: "switch" },
-            id: "updates.beta",
-            keywords: ["beta", "update"],
-            path: ["update", "includeBeta"],
+            disabledWhen: (settings) => {
+              return !settings.sync.enabled;
+            },
+            id: "sync.syncText",
+            keywords: ["sync", "text", "content"],
+            parentId: "sync.enabled",
+            path: ["sync", "syncText"],
             value: (settings) => {
-              return settings.update.includeBeta;
+              return settings.sync.syncText;
             },
           },
           {
             control: { type: "switch" },
-            id: "updates.nightly",
-            keywords: ["nightly", "update"],
-            path: ["update", "includeNightly"],
-            value: (settings) => {
-              return settings.update.includeNightly;
+            disabledWhen: (settings) => {
+              return !settings.sync.enabled;
             },
+            id: "sync.syncImage",
+            keywords: ["sync", "image", "picture", "content"],
+            parentId: "sync.enabled",
+            path: ["sync", "syncImage"],
+            value: (settings) => {
+              return settings.sync.syncImage;
+            },
+          },
+          {
+            control: { type: "switch" },
+            disabledWhen: (settings) => {
+              return !settings.sync.enabled;
+            },
+            id: "sync.syncFiles",
+            keywords: ["sync", "file", "path", "content"],
+            parentId: "sync.enabled",
+            path: ["sync", "syncFiles"],
+            value: (settings) => {
+              return settings.sync.syncFiles;
+            },
+          },
+          {
+            control: { max: 1024, min: 1, suffixKey: "mb", type: "number" },
+            disabledWhen: (settings) => {
+              return !settings.sync.enabled || !settings.sync.syncFiles;
+            },
+            id: "sync.fileThreshold",
+            keywords: ["sync", "file", "size", "limit", "mb", "threshold"],
+            parentId: "sync.syncFiles",
+            path: ["sync", "fileThreshold"],
+            value: (settings) => {
+              return settings.sync.fileThreshold;
+            },
+          },
+          {
+            control: { max: 10240, min: 1, suffixKey: "mb", type: "number" },
+            disabledWhen: (settings) => {
+              return !settings.sync.enabled || !settings.sync.syncFiles;
+            },
+            id: "sync.fileMaxSize",
+            keywords: ["sync", "file", "size", "limit", "mb", "max"],
+            parentId: "sync.syncFiles",
+            path: ["sync", "fileMaxSize"],
+            value: (settings) => {
+              return settings.sync.fileMaxSize;
+            },
+          },
+        ],
+      },
+      {
+        id: "syncDevices",
+        settings: [
+          {
+            control: { key: "sync.devices", type: "syncDevices" },
+            id: "sync.devices",
+            keywords: [
+              "sync",
+              "device",
+              "pair",
+              "nearby",
+              "blocklist",
+              "trust",
+            ],
           },
         ],
       },
@@ -879,11 +968,6 @@ export const preferenceTabs: PreferenceTab[] = [
       {
         id: "about",
         settings: [
-          {
-            control: { type: "action" },
-            id: "about.checkUpdates",
-            keywords: ["update", "version"],
-          },
           {
             control: { type: "action" },
             id: "about.github",

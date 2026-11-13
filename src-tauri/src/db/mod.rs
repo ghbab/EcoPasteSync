@@ -6,10 +6,12 @@ pub mod items;
 pub mod models;
 pub mod path;
 pub mod state;
+pub mod sync_db;
 
 pub use init::init;
 pub use path::db_path;
 pub use state::DatabaseState;
+pub use sync_db::SyncDatabaseState;
 
 #[cfg(test)]
 pub(crate) mod test_support {
@@ -19,7 +21,7 @@ pub(crate) mod test_support {
     use sqlx::SqlitePool;
 
     /// 仓储层单测用的内存库连接池：单连接（保证所有查询命中同一个 in-memory DB）+
-    /// 开启外键（验证 `ON DELETE SET NULL`）+ 跑完整 `migrations`。
+    /// 开启外键（验证 `ON DELETE SET NULL`）+ 跑完整主库 `migrations`。
     pub async fn memory_pool() -> SqlitePool {
         let options = SqliteConnectOptions::from_str("sqlite::memory:")
             .expect("valid sqlite url")
@@ -35,6 +37,26 @@ pub(crate) mod test_support {
             .run(&pool)
             .await
             .expect("failed to run migrations on in-memory sqlite");
+
+        pool
+    }
+
+    /// 同步仓储单测用的内存库连接池：只跑同步库专属 migration。
+    pub async fn sync_memory_pool() -> SqlitePool {
+        let options = SqliteConnectOptions::from_str("sqlite::memory:")
+            .expect("valid sqlite url")
+            .foreign_keys(true);
+
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(options)
+            .await
+            .expect("failed to open in-memory sync sqlite");
+
+        sqlx::migrate!("./migrations_sync")
+            .run(&pool)
+            .await
+            .expect("failed to run sync migrations on in-memory sqlite");
 
         pool
     }

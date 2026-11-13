@@ -96,6 +96,8 @@ export interface FileEntry {
   isDir: boolean;
   isImage: boolean;
   exists: boolean;
+  /** 由远端设备同步而来：显示来源标记，粘贴时按需传输文件本体。 */
+  remote: boolean;
   iconPath?: string;
 }
 

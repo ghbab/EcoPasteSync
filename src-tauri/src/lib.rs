@@ -15,8 +15,8 @@ mod menu;
 mod mouse;
 mod settings;
 mod shortcut;
+mod sync;
 mod tray;
-mod update;
 mod window;
 
 use tauri::{Manager, WindowEvent};
@@ -80,19 +80,9 @@ pub fn run() {
     #[cfg(target_os = "macos")]
     let builder = builder.plugin(tauri_plugin_macos_permissions::init());
 
-    let updater_plugin = match std::env::var("TAURI_UPDATER_PUBLIC_KEY")
-        .or_else(|_| std::env::var("TAURI_SIGNING_PUBLIC_KEY"))
-    {
-        Ok(pubkey) if !pubkey.trim().is_empty() => {
-            tauri_plugin_updater::Builder::new().pubkey(pubkey).build()
-        }
-        _ => tauri_plugin_updater::Builder::new().build(),
-    };
-
     builder
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
-        .plugin(updater_plugin)
         .plugin(core::prevent_default::init())
         .invoke_handler(tauri::generate_handler![
             commands::get_run_as_admin_status,
@@ -120,6 +110,14 @@ pub fn run() {
             commands::get_file_icon_path,
             commands::write_to_clipboard,
             commands::paste_clipboard_item,
+            commands::get_latest_file_transfer,
+            commands::get_file_transfer_snapshot,
+            commands::pause_file_transfer,
+            commands::resume_file_transfer,
+            commands::cancel_file_transfer,
+            commands::resolve_file_transfer_conflicts,
+            commands::retry_file_transfer_to_dir,
+            commands::copy_file_transfer_paths,
             commands::start_drag_clipboard_item,
             commands::toggle_clipboard_item_favorite,
             commands::toggle_clipboard_item_pinned,
@@ -144,7 +142,6 @@ pub fn run() {
             commands::get_window_lifecycle_snapshot,
             commands::open_preference_with_highlight,
             commands::take_pending_preference_highlight,
-            commands::open_update_window,
             commands::open_onboarding,
             commands::set_onboarding_step,
             commands::finish_onboarding,
@@ -163,6 +160,16 @@ pub fn run() {
             commands::resume_global_shortcuts,
             commands::update_settings,
             commands::reset_settings,
+            commands::get_sync_state,
+            commands::request_sync_pair,
+            commands::request_sync_pair_by_address,
+            commands::get_pending_sync_pair,
+            commands::respond_sync_pair,
+            commands::remove_sync_device,
+            commands::rename_sync_device,
+            commands::set_sync_device_permissions,
+            commands::set_sync_device_blocked,
+            commands::refresh_sync_devices,
             commands::export_history_backup,
             commands::inspect_history_backup,
             commands::take_pending_backup,
@@ -175,11 +182,6 @@ pub fn run() {
             commands::open_preference_directory,
             commands::get_autostart,
             commands::set_autostart,
-            commands::get_update_status,
-            commands::check_for_updates,
-            commands::download_update,
-            commands::install_update,
-            commands::skip_update_version,
             menu::clipboard_item::popup_clipboard_item_menu,
         ])
         .on_menu_event(|app, event| {
@@ -199,7 +201,6 @@ pub fn run() {
             handle.manage(window_state_store);
 
             handle.manage(window::lifecycle::WindowLifecycleManager::new());
-            update::init(&handle);
 
             let settings = settings::init(&handle).map_err(|err| {
                 log::error!("settings initialization failed: {err:?}");
@@ -208,12 +209,35 @@ pub fn run() {
 
             let handle_db = handle.clone();
             tauri::async_runtime::block_on(async move {
-                let pool = db::init(&handle_db).await.map_err(|err| {
+                // 主库只应用上游 migration；fork 的同步表放在独立的 sync.db。
+                // 顺序固定：打开主库 → 初始化同步库 → 拆分旧版遗留数据 → 主库 migration。
+                let pool = db::init::open(&handle_db).await.map_err(|err| {
                     log::error!("database initialization failed: {err:?}");
                     err
                 })?;
+                let sync_pool = db::sync_db::init(&handle_db).await.map_err(|err| {
+                    log::error!("sync database initialization failed: {err:?}");
+                    err
+                })?;
+                db::sync_db::migrate_legacy(&pool, &sync_pool)
+                    .await
+                    .map_err(|err| {
+                        log::error!("legacy sync data migration failed: {err:?}");
+                        err
+                    })?;
+                db::init::migrate(&pool).await.map_err(|err| {
+                    log::error!("database migration failed: {err:?}");
+                    err
+                })?;
+
                 handle_db.manage(db::DatabaseState::new(pool));
+                handle_db.manage(db::SyncDatabaseState::new(sync_pool));
                 clipboard::init(&handle_db)?;
+
+                // 数据库就绪后初始化局域网同步（按设置决定是否启动服务）。
+                if let Err(err) = sync::init(&handle_db) {
+                    log::error!("sync initialization failed: {err:?}");
+                }
                 Ok::<_, anyhow::Error>(())
             })?;
 
@@ -250,8 +274,6 @@ pub fn run() {
                     log::error!("open onboarding window failed: {err:?}");
                 }
             }
-
-            update::schedule_auto_check(&handle);
 
             // Windows 冷启动文件关联：第一个实例从自身启动参数里取 `.ecopastebak` 路径。
             // 已运行时双击由 `single_instance` 回调处理；此处覆盖应用未启动时双击的冷启动场景，

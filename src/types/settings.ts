@@ -65,8 +65,6 @@ export type WindowOpenGroupSelection = "preserve" | "all" | `group:${string}`;
 
 export type PreviewHoverDelayMs = "ms300" | "ms500" | "ms1000";
 
-export type UpdateFrequency = "daily" | "weekly" | "monthly";
-
 export type OnboardingLegacyImportType = "normal" | "favorite";
 
 export interface General {
@@ -196,13 +194,19 @@ export interface Clipboard {
   filters: Filters;
 }
 
-export interface Update {
-  autoCheck: boolean;
-  frequency: UpdateFrequency;
-  includeBeta: boolean;
-  includeNightly: boolean;
-  lastCheckedAt: string | null;
-  skippedVersion: string | null;
+export interface Sync {
+  enabled: boolean;
+  deviceName: string;
+  port: number;
+  /** 是否允许被局域网内其它设备发现；关闭后不接受新的配对请求，已配对同步不受影响。 */
+  discoverable: boolean;
+  syncText: boolean;
+  syncImage: boolean;
+  syncFiles: boolean;
+  /** 文件本体直接传输阈值（MB），超过则只同步路径、粘贴时按需拉取。 */
+  fileThreshold: number;
+  /** 单文件同步上限（MB），超过则只同步路径且不提供拉取。 */
+  fileMaxSize: number;
 }
 
 export interface Settings {
@@ -211,7 +215,7 @@ export interface Settings {
   shortcuts: Shortcuts;
   clipboard: Clipboard;
   onboarding: Onboarding;
-  update: Update;
+  sync: Sync;
 }
 
 /**

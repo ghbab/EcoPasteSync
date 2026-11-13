@@ -4,8 +4,8 @@ version = "1.1.0"
 description = "A local-first clipboard manager for macOS and Windows."
 authors = ["ayangweb"]
 license = "Apache-2.0"
-homepage = "https://github.com/EcoPasteHub/EcoPaste"
-repository = "https://github.com/EcoPasteHub/EcoPaste"
+homepage = "https://github.com/ghbab/EcoPasteSync"
+repository = "https://github.com/ghbab/EcoPasteSync"
 readme = "../README.md"
 publish = false
 edition = "2021"
@@ -36,7 +36,7 @@ blake3 = "1"
 clipboard-rs = "0.3"
 uuid = { version = "1", features = ["v4"] }
 regex = "1"
-tokio = { version = "1", features = ["time"] }
+tokio = { version = "1", features = ["time", "net", "sync", "macros", "rt-multi-thread", "io-util"] }
 tauri-plugin-global-shortcut = "2"
 tauri-plugin-single-instance = "2"
 tauri-plugin-opener = "2"
@@ -47,20 +47,23 @@ rodio = { version = "0.20", default-features = false, features = ["symphonia-mp3
 file_icon_provider = "1"
 image = { version = "0.25", default-features = false, features = ["png"] }
 tauri-plugin-os = "2"
-tauri-plugin-updater = "2"
-time = "0.3"
 drag = "2.1"
 zip = { version = "4.6", default-features = false, features = ["deflate"] }
 walkdir = "2"
 tempfile = "3"
 argon2 = { version = "0.5", features = ["std"] }
 chacha20poly1305 = { version = "0.10", features = ["std"] }
+x25519-dalek = { version = "2", features = ["static_secrets"] }
 rand = "0.8"
 zeroize = "1"
-url = "2"
+mdns-sd = "0.13"
+axum = "0.8"
+reqwest = { version = "0.12", default-features = false, features = ["json"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
+libc = "0.2"
 core-graphics = "0.25"
+keyring = { version = "3", default-features = false, features = ["apple-native"] }
 objc2 = "0.6"
 objc2-foundation = { version = "0.3", features = ["NSString", "NSData", "NSDictionary", "NSURL", "NSArray", "NSGeometry", "NSAttributedString"] }
 objc2-app-kit = { version = "0.3", features = ["NSWorkspace", "NSRunningApplication", "NSImage", "NSView", "NSWindow", "NSEvent", "NSApplication", "NSResponder", "NSPasteboard", "NSPasteboardItem", "NSDraggingItem", "NSDraggingSession", "NSAttributedString", "NSStringDrawing", "NSColor", "NSFont", "NSParagraphStyle", "NSBezierPath", "NSGraphics"] }
@@ -69,6 +72,7 @@ plist = { version = "1", default-features = false }
 tauri-plugin-macos-permissions = "2"
 
 [target.'cfg(target_os = "windows")'.dependencies]
+keyring = { version = "3", default-features = false, features = ["windows-native"] }
 winapi = { version = "0.3", features = [
     "winuser",
     "processthreadsapi",
@@ -77,6 +81,7 @@ winapi = { version = "0.3", features = [
     "winnt",
     "minwindef",
     "windef",
+    "fileapi",
 ] }
 windows-registry = "0.6"
 windows-result = "0.4"
@@ -89,6 +94,7 @@ windows = { version = "0.52", features = [
     "Win32_System_DataExchange",
     "Win32_System_SystemServices",
     "Win32_System_Threading",
+    "Win32_System_Variant",
     "Win32_UI_WindowsAndMessaging",
     "Win32_UI_Shell",
 ] }
