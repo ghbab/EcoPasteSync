@@ -281,53 +281,81 @@ jobs:
             echo "${delimiter}"
           } >> "${GITHUB_OUTPUT}"
 
-      - name: Build and upload app
-        uses: tauri-apps/tauri-action@v1
+      # Windows 只产出裸 exe（不构建安装包），macOS 产出 dmg 与 updater 用的 app.tar.gz。
+      # 关闭 CI 环境变量，避免 Tauri 打包器按 CI 模式改变产物行为。
+      - name: Build app
+        shell: bash
         env:
           CI: false
-          GITHUB_TOKEN: ${{ github.token }}
           PLATFORM: ${{ matrix.os }}
-        with:
-          args: --target ${{ matrix.target }}
-          prerelease: ${{ needs.release-metadata.outputs.prerelease }}
-          releaseBody: ${{ steps.changelog.outputs.body }}
-          releaseId: ${{ needs.release-metadata.outputs.release_id }}
-          retryAttempts: 3
-          tagName: ${{ needs.release-metadata.outputs.tag_name }}
+        run: |
+          set -euo pipefail
 
-      # Windows 便携版：取 tauri build 产出的裸 exe 压缩为 zip，免安装直接运行。
-      - name: Package Windows portable zip
-        if: runner.os == 'Windows'
+          if [[ "${{ runner.os }}" == "Windows" ]]; then
+            pnpm tauri build --target ${{ matrix.target }} --no-bundle
+          else
+            pnpm tauri build --target ${{ matrix.target }} --bundles app,dmg
+          fi
+
+      # 统一产物命名：EcoPasteSync_<tag>_<平台>_<架构>.<类型>
+      # 例如 EcoPasteSync_v1.1.0.1-debug.12_windows_x64.zip。
+      - name: Package and upload assets
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          shopt -s nullglob
 
           tag_name="${{ needs.release-metadata.outputs.tag_name }}"
-          version="${tag_name#v}"
-
-          exe="src-tauri/target/${{ matrix.target }}/release/EcoPasteSync.exe"
-          if [[ ! -f "${exe}" ]]; then
-            # 兜底：部分 Tauri 版本仍保留 Cargo 包名作为二进制名。
-            exe="src-tauri/target/${{ matrix.target }}/release/EcoPaste.exe"
-          fi
-          if [[ ! -f "${exe}" ]]; then
-            echo "::error::Portable exe not found under src-tauri/target/${{ matrix.target }}/release."
-            exit 1
-          fi
+          release_dir="src-tauri/target/${{ matrix.target }}/release"
 
           arch="x64"
           if [[ "${{ matrix.target }}" == aarch64* ]]; then
             arch="aarch64"
           fi
 
-          dist="dist-portable"
-          mkdir -p "${dist}"
-          cp "${exe}" "${dist}/EcoPasteSync.exe"
+          platform="windows"
+          if [[ "${{ runner.os }}" == "macOS" ]]; then
+            platform="macos"
+          fi
 
-          zip_name="EcoPasteSync_${version}_${arch}_portable.zip"
-          powershell -NoProfile -Command "Compress-Archive -Path 'dist-portable/*' -DestinationPath '${zip_name}' -Force"
+          base_name="EcoPasteSync_${tag_name}_${platform}_${arch}"
+          assets=()
 
-          echo "Uploading ${zip_name} to release ${tag_name}"
-          gh release upload "${tag_name}" "${zip_name}" --clobber
+          if [[ "${platform}" == "windows" ]]; then
+            exe="${release_dir}/EcoPasteSync.exe"
+            if [[ ! -f "${exe}" ]]; then
+              # 兜底：部分 Tauri 版本仍保留 Cargo 包名作为二进制名。
+              exe="${release_dir}/EcoPaste.exe"
+            fi
+            if [[ ! -f "${exe}" ]]; then
+              echo "::error::Portable exe not found under ${release_dir}."
+              exit 1
+            fi
+
+            dist="dist-portable"
+            rm -rf "${dist}"
+            mkdir -p "${dist}"
+            cp "${exe}" "${dist}/EcoPasteSync.exe"
+
+            zip_name="${base_name}.zip"
+            powershell -NoProfile -Command "Compress-Archive -Path 'dist-portable/*' -DestinationPath '${zip_name}' -Force"
+            assets+=("${zip_name}")
+          else
+            dmg_files=("${release_dir}"/bundle/dmg/*.dmg)
+            app_tar_files=("${release_dir}"/bundle/macos/*.app.tar.gz)
+            if [[ ${#dmg_files[@]} -eq 0 || ${#app_tar_files[@]} -eq 0 ]]; then
+              echo "::error::macOS dmg or app.tar.gz not found under ${release_dir}/bundle."
+              exit 1
+            fi
+
+            dmg_name="${base_name}.dmg"
+            app_tar_name="${base_name}.app.tar.gz"
+            cp "${dmg_files[0]}" "${dmg_name}"
+            cp "${app_tar_files[0]}" "${app_tar_name}"
+            assets+=("${dmg_name}" "${app_tar_name}")
+          fi
+
+          echo "Uploading ${assets[*]} to release ${tag_name}"
+          gh release upload "${tag_name}" "${assets[@]}" --clobber

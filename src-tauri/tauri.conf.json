@@ -65,7 +65,7 @@
     "licenseFile": "../LICENSE",
     "resources": ["assets/tray.ico"],
     "shortDescription": "EcoPasteSync",
-    "targets": ["nsis", "dmg", "app"]
+    "targets": ["dmg", "app"]
   },
   "identifier": "com.ayangweb.eco-paste",
   "productName": "EcoPasteSync",
