@@ -64,7 +64,7 @@ mod windows_impl {
         CoCreateInstance, CoInitializeEx, CoUninitialize, IDispatch, CLSCTX_ALL,
         COINIT_APARTMENTTHREADED,
     };
-    use windows::Win32::System::Variant::{VARIANT, VT_I4};
+    use windows::Win32::System::Variant::{VARIANT, VARIANT_0_0, VT_I4};
     use windows::Win32::UI::Shell::{IShellWindows, IWebBrowser2, ShellWindows};
 
     /// CREATE_NO_WINDOW：避免每次粘贴都闪出控制台窗口。
@@ -212,8 +212,10 @@ mod windows_impl {
                 // ShellWindows.Item 接受 VARIANT 形式的索引，这里手工构造 VT_I4。
                 // 不能用 VARIANT::from：该类型没有 From<i32> 实现。
                 let mut variant: VARIANT = VARIANT::default();
-                variant.Anonymous.Anonymous.vt = VT_I4;
-                variant.Anonymous.Anonymous.Anonymous.lVal = index;
+                // ManuallyDrop 不会自动 DerefMut，必须显式解引用后写入字段。
+                let inner: &mut VARIANT_0_0 = &mut *variant.Anonymous.Anonymous;
+                inner.vt = VT_I4;
+                inner.Anonymous.lVal = index;
 
                 let dispatch: IDispatch = match shell_windows.Item(variant) {
                     Ok(value) => value,
