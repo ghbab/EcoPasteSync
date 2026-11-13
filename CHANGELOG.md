@@ -1,5 +1,20 @@
 # Changelog
 
+## [1.1.0.1](https://github.com/ghbab/EcoPasteSync/compare/v1.1.0...v1.1.0.1) (2026-11-13)
+
+### ✨ Features
+
+* add LAN clipboard sync with device pairing, per-device send/receive permissions and encrypted transport
+* paste synced files into the foreground Explorer / Finder directory, with conflict handling, a progress window and resumable transfer jobs
+* paste file records as plain paths when a text input (address bar, search box) has focus
+* unify release artifact naming as `EcoPasteSync_<tag>_<platform>_<arch>`; Windows now ships a portable zip only
+
+### 🐛 Bug Fixes
+
+* resolve the foreground Explorer directory through in-process Shell COM instead of spawning `powershell.exe`
+* remove the transparent border around the file transfer and device pairing windows on Windows
+* fix the conflict list rendering as a transparent black area
+
 ## [1.2.0-preview.1](https://github.com/EcoPasteHub/EcoPaste/compare/v1.2.0...v1.2.0-preview.1) (2026-11-12)
 
 ### ✨ Features
