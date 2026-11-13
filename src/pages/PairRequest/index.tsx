@@ -12,6 +12,7 @@ import {
 import { TAURI_EVENT } from "@/constants/events";
 import { WINDOW_LABEL } from "@/constants/windows";
 import { useTauriListen } from "@/hooks/useTauriListen";
+import { isMac } from "@/utils/is";
 import { log } from "@/utils/log";
 
 /** 待确认请求的轮询间隔：Rust 侧 120 秒过期，窗口据此在请求失效后自动退出。 */
@@ -113,9 +114,22 @@ const PairRequest: FC = () => {
     );
   }
 
+  // 窗口本身是 transparent + decorations(false)：
+  // macOS 用透明留边展示系统阴影与圆角卡片；Windows 上留边会露出一圈透明区域，
+  // 看起来像多了一道透明边框，因此改为不透明背景铺满整个窗口。
   return (
-    <div className="size-screen bg-transparent p-3">
-      <div className="flex h-full flex-col overflow-hidden rounded-4 border border-ant-border-secondary bg-ant-elevated shadow-2xl">
+    <div
+      className={
+        isMac ? "size-screen bg-transparent p-3" : "size-screen bg-ant-elevated"
+      }
+    >
+      <div
+        className={
+          isMac
+            ? "flex h-full flex-col overflow-hidden rounded-4 border border-ant-border-secondary bg-ant-elevated shadow-2xl"
+            : "flex h-full flex-col overflow-hidden"
+        }
+      >
         <div
           className="flex shrink-0 items-center justify-center px-4 pt-4 pb-2"
           data-tauri-drag-region
