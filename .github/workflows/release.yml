@@ -343,18 +343,16 @@ jobs:
             powershell -NoProfile -Command "Compress-Archive -Path 'dist-portable/*' -DestinationPath '${zip_name}' -Force"
             assets+=("${zip_name}")
           else
+            # 应用已移除自动更新能力，macOS 只需分发 dmg 安装镜像。
             dmg_files=("${release_dir}"/bundle/dmg/*.dmg)
-            app_tar_files=("${release_dir}"/bundle/macos/*.app.tar.gz)
-            if [[ ${#dmg_files[@]} -eq 0 || ${#app_tar_files[@]} -eq 0 ]]; then
-              echo "::error::macOS dmg or app.tar.gz not found under ${release_dir}/bundle."
+            if [[ ${#dmg_files[@]} -eq 0 ]]; then
+              echo "::error::macOS dmg not found under ${release_dir}/bundle/dmg."
               exit 1
             fi
 
             dmg_name="${base_name}.dmg"
-            app_tar_name="${base_name}.app.tar.gz"
             cp "${dmg_files[0]}" "${dmg_name}"
-            cp "${app_tar_files[0]}" "${app_tar_name}"
-            assets+=("${dmg_name}" "${app_tar_name}")
+            assets+=("${dmg_name}")
           fi
 
           echo "Uploading ${assets[*]} to release ${tag_name}"
