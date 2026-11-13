@@ -58,12 +58,13 @@ mod windows_impl {
     use winapi::um::winbase::QueryFullProcessImageNameW;
     use winapi::um::winnt::PROCESS_QUERY_LIMITED_INFORMATION;
     use winapi::um::winuser::{GetForegroundWindow, GetWindowThreadProcessId, IsWindow};
-    use windows::core::BSTR;
+    use windows::core::{ComInterface, BSTR};
+    use windows::Win32::Foundation::SHANDLE_PTR;
     use windows::Win32::System::Com::{
         CoCreateInstance, CoInitializeEx, CoUninitialize, IDispatch, CLSCTX_ALL,
         COINIT_APARTMENTTHREADED,
     };
-    use windows::Win32::System::Variant::VARIANT;
+    use windows::Win32::System::Variant::{VARIANT, VT_I4};
     use windows::Win32::UI::Shell::{IShellWindows, IWebBrowser2, ShellWindows};
 
     /// CREATE_NO_WINDOW：避免每次粘贴都闪出控制台窗口。
@@ -163,18 +164,19 @@ mod windows_impl {
 
     /// 用进程内 Shell COM（ShellWindows + IWebBrowser2）按 HWND 取目录。
     fn com_explorer_path(target: HWND) -> Option<PathBuf> {
-        // RPC_E_CHANGED_MODE：当前线程已用其它套间初始化过 COM，仍可继续调用。
-        const RPC_E_CHANGED_MODE: i32 = 0x8001_0106u32 as i32;
-
         unsafe {
-            let init_result = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
-            // S_OK / S_FALSE 都表示本次调用需要配对 CoUninitialize；
-            // RPC_E_CHANGED_MODE 表示 COM 已初始化但套间不同，可直接使用、无需反初始化。
-            let should_uninitialize: bool = init_result.is_ok();
-            if init_result.is_err() && init_result.0 != RPC_E_CHANGED_MODE {
-                log::warn!("foreground: CoInitializeEx failed: {init_result:?}");
-                return None;
-            }
+            // CoInitializeEx 返回 Ok 时（S_OK / S_FALSE）本次调用需要配对 CoUninitialize；
+            // 返回 RPC_E_CHANGED_MODE 表示当前线程已用其它套间初始化过 COM：
+            // 此时 COM 依然可以调用，只是本次不需要也不能再调用 CoUninitialize。
+            let should_uninitialize: bool = match CoInitializeEx(None, COINIT_APARTMENTTHREADED) {
+                Ok(()) => true,
+                Err(err) => {
+                    log::info!(
+                        "foreground: CoInitializeEx failed, continue with existing apartment: {err:?}"
+                    );
+                    false
+                }
+            };
 
             let path: Option<PathBuf> = com_explorer_path_inner(target);
 
@@ -207,8 +209,13 @@ mod windows_impl {
             };
 
             for index in 0..count {
-                let variant: VARIANT = VARIANT::from(index);
-                let dispatch: IDispatch = match shell_windows.Item(&variant) {
+                // ShellWindows.Item 接受 VARIANT 形式的索引，这里手工构造 VT_I4。
+                // 不能用 VARIANT::from：该类型没有 From<i32> 实现。
+                let mut variant: VARIANT = VARIANT::default();
+                variant.Anonymous.Anonymous.vt = VT_I4;
+                variant.Anonymous.Anonymous.Anonymous.lVal = index;
+
+                let dispatch: IDispatch = match shell_windows.Item(variant) {
                     Ok(value) => value,
                     Err(_) => continue,
                 };
@@ -216,11 +223,11 @@ mod windows_impl {
                     Ok(value) => value,
                     Err(_) => continue,
                 };
-                let window_handle: i32 = match browser.HWND() {
+                let window_handle: SHANDLE_PTR = match browser.HWND() {
                     Ok(value) => value,
                     Err(_) => continue,
                 };
-                if window_handle as isize != target as isize {
+                if window_handle.0 != target as isize {
                     continue;
                 }
 
