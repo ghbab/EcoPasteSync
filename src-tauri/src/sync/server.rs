@@ -22,10 +22,11 @@ use crate::core::Result;
 use crate::sync::crypto;
 use crate::sync::devices::{self, SyncDeviceRecord};
 use crate::sync::protocol::{
-    file_chunk_signature_target, pull_signature_target, PairRequestDto, SyncClipboardItemDto,
-    API_CLIPBOARD_PULL, API_CLIPBOARD_PUSH, API_FILE_CHUNK, API_IMAGE, API_INFO, API_PAIR,
-    API_PAIR_STATUS, API_VERIFY, FILE_CHUNK_SIZE, HEADER_DEVICE_ID, HEADER_SIGNATURE,
-    HEADER_TIMESTAMP, PAIR_DEVICE_ID_MAX_CHARS, PULL_PAGE_LIMIT,
+    bump_signature_target, file_chunk_signature_target, pull_signature_target, PairRequestDto,
+    SyncClipboardItemDto, API_CLIPBOARD_BUMP, API_CLIPBOARD_PULL, API_CLIPBOARD_PUSH,
+    API_FILE_CHUNK, API_IMAGE, API_INFO, API_PAIR, API_PAIR_STATUS, API_VERIFY, FILE_CHUNK_SIZE,
+    HEADER_DEVICE_ID, HEADER_SIGNATURE, HEADER_TIMESTAMP, PAIR_DEVICE_ID_MAX_CHARS,
+    PULL_PAGE_LIMIT,
 };
 use crate::sync::{collect_shared_paths, item_to_dto, SyncManager};
 
@@ -103,6 +104,7 @@ fn build_router(ctx: Arc<ServerCtx>) -> Router {
         .route(API_VERIFY, get(handle_verify))
         .route(API_CLIPBOARD_PUSH, post(handle_push))
         .route(API_CLIPBOARD_PULL, get(handle_pull))
+        .route(API_CLIPBOARD_BUMP, post(handle_bump))
         .route(&format!("{API_IMAGE}/{{file}}"), get(handle_image))
         .route(API_FILE_CHUNK, get(handle_file_chunk))
         .with_state(ctx)
@@ -331,6 +333,56 @@ async fn handle_push(
     crate::sync::ingest_remote_item(&ctx.app, &device.device_id, &dto).await;
 
     sealed_response(&key, &json!({ "ok": true }))
+}
+
+/// 置顶通知：把本机对应内容哈希的 files 条目提到最前。
+///
+/// 内容哈希放在 query 里参与签名（body 不承载业务字段），避免签名被挪用去置顶其它条目。
+async fn handle_bump(
+    State(ctx): State<Arc<ServerCtx>>,
+    headers: HeaderMap,
+    Query(params): Query<std::collections::HashMap<String, String>>,
+) -> Response {
+    let content_hash = match params.get("hash") {
+        Some(hash) if !hash.is_empty() && hash.len() <= 128 => hash.clone(),
+        _ => return StatusCode::BAD_REQUEST.into_response(),
+    };
+
+    let signature_target = bump_signature_target(&content_hash);
+    let (device, key) = match verify_auth(&ctx, &headers, &signature_target).await {
+        Ok(pair) => pair,
+        Err(status) => return status.into_response(),
+    };
+
+    // 「发送」权限关闭后，该设备不能再影响本机条目顺序。
+    if !device.allow_send {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+
+    let pool = ctx.app.state::<crate::db::DatabaseState>().pool().await;
+    let hit = match crate::db::items::bump_files_item(&pool, &content_hash).await {
+        Ok(Some(id)) => {
+            // 前端按事件刷新列表，顺序变化立刻可见。
+            if let Err(err) = ctx.app.emit(
+                "clipboard://updated",
+                json!({ "id": id, "kind": "files", "deduplicated": true }),
+            ) {
+                log::warn!("sync bump: emit clipboard update failed: {err}");
+            }
+            true
+        }
+        Ok(None) => {
+            // 本机没有该条目：回传 hit=false，发起端会改用完整推送把条目补过来。
+            log::info!("sync bump: no local files item with hash {content_hash}");
+            false
+        }
+        Err(err) => {
+            log::warn!("sync bump: update local item failed: {err}");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+
+    sealed_response(&key, &json!({ "ok": true, "hit": hit }))
 }
 
 async fn handle_pull(

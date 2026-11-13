@@ -19,12 +19,14 @@ pub(crate) mod client;
 mod crypto;
 pub(crate) mod devices;
 mod discovery;
-mod file_state;
-mod file_transfer;
+pub(crate) mod file_state;
+pub(crate) mod file_time;
+pub(crate) mod file_transfer;
 pub(crate) mod item_meta;
 mod protocol;
 mod secrets;
 mod server;
+pub(crate) mod transfer_jobs;
 
 use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, SocketAddr};
@@ -907,25 +909,9 @@ pub(crate) fn current_platform_tag() -> &'static str {
 
 // ---- 模块级入口（供其它模块调用）----
 
-/// 粘贴/复制远端 files 条目时，把文件拉到本地缓存并返回可写回剪贴板的路径。
-///
-/// 返回 `None` 表示本机条目或已内联拉取完成，调用方直接使用原 content；
-/// 返回 `Some(paths)` 时调用方应改用这些本地路径写回剪贴板。
-pub async fn ensure_files_local(
-    app: &AppHandle,
-    item: &ClipboardItem,
-) -> Result<Option<Vec<String>>> {
-    if item.kind != ClipboardKind::Files {
-        return Ok(None);
-    }
-
-    // 来源设备记录在独立同步库；本机复制的条目没有记录，直接使用原始路径。
-    let sync_pool = devices::pool(app).await;
-    if item_meta::source_of(&sync_pool, &item.id).await?.is_none() {
-        return Ok(None);
-    }
-
-    file_transfer::ensure_item_files(app, &item.id, &item.content).await
+/// 启动时清理上次异常退出遗留的传输临时文件。
+pub async fn cleanup_interrupted_transfers(app: &AppHandle) -> Result<()> {
+    file_transfer::cleanup_on_startup(app).await
 }
 
 /// 初始化：注册管理器并按设置决定是否启动。
@@ -935,6 +921,15 @@ pub fn init(app: &AppHandle) -> Result<()> {
 
     let settings = app.state::<SettingsStore>().snapshot();
     manager.apply(app, &settings);
+
+    // 清理上次异常退出留下的传输临时文件；失败只记日志，不影响启动。
+    let cleanup_app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        if let Err(err) = file_transfer::cleanup_on_startup(&cleanup_app).await {
+            log::warn!("sync transfer cleanup failed: {err:?}");
+        }
+    });
+
     Ok(())
 }
 
@@ -1012,13 +1007,82 @@ pub async fn maybe_broadcast_item(app: &AppHandle, item: &ClipboardItem) {
     }
 }
 
+/// 重复复制同一批文件时调用：通知对端把相同的 files 条目录置顶。
+///
+/// 本机去重只更新复制时间，不产生新条目；对端如果什么都不做，两端顺序会不一致。
+/// 若对端没有该条目（例如它清空过历史），bump 会返回未命中，此时改用完整推送
+/// 把条目补过去，保证两端都有这条记录且顺序一致。
+pub async fn broadcast_item_bump(app: &AppHandle, item: &ClipboardItem) {
+    let Some(manager) = app.try_state::<Arc<SyncManager>>() else {
+        return;
+    };
+    if !manager.is_running() {
+        return;
+    }
+
+    let settings = app.state::<SettingsStore>().snapshot();
+    if !settings.sync.enabled || !settings.sync.sync_files {
+        return;
+    }
+
+    let pool = devices::pool(app).await;
+    let targets = match devices::list_devices(&pool).await {
+        Ok(list) => list,
+        Err(err) => {
+            log::warn!("sync bump: list devices failed: {err}");
+            return;
+        }
+    };
+
+    // 未命中时要推送完整条目：提前构造 DTO，避免在并发任务里重复采集文件指纹。
+    let dto = item_to_dto(
+        item,
+        megabytes_to_bytes(settings.sync.file_threshold),
+        megabytes_to_bytes(settings.sync.file_max_size),
+    );
+    if item.sync_source_device_id.is_none() {
+        // 本机真实共享出去的路径需要登记，供对端按需拉取时校验。
+        manager.remember_shared_paths(&collect_shared_paths(&item.content));
+    }
+
+    for device in targets {
+        if !device.allow_send {
+            continue;
+        }
+        let Some(address) =
+            manager.device_address(&device.device_id, device.last_address.as_deref())
+        else {
+            continue;
+        };
+
+        let app = app.clone();
+        let hash = item.content_hash.clone();
+        let dto = dto.clone();
+        let device_id = device.device_id.clone();
+        tauri::async_runtime::spawn(async move {
+            match client::send_bump(&app, &device.shared_key, &address, &hash).await {
+                Ok(true) => {}
+                Ok(false) => {
+                    // 对端没有该条目：改为完整推送，让对端新增而不是仅尝试置顶。
+                    if let Err(err) =
+                        client::push_item(&app, &device.shared_key, &address, &dto).await
+                    {
+                        log::warn!("sync bump push to {device_id} ({address}) failed: {err}");
+                    }
+                }
+                Err(err) => {
+                    log::warn!("sync bump to {device_id} ({address}) failed: {err}");
+                }
+            }
+        });
+    }
+}
+
 /// 接收端对 files 条目的落盘决策。
 enum IncomingFiles {
     /// 不需要本地字节：对端未提供指纹，或路径本机已存在。
     Ignore,
-    /// 已内联拉取完成，`content` 换成缓存路径。
-    Pulled(Vec<String>),
-    /// 需要登记状态表：`Pending` 等待粘贴时按需拉取，`Unavailable` 仅路径可用。
+    /// 需要登记状态表：`Pending` 等待粘贴时传输，`Unavailable` 仅路径可用。
     Deferred {
         state: SyncFileState,
         total_bytes: i64,
@@ -1161,7 +1225,6 @@ async fn resolve_incoming_files(
     }
 
     let settings = app.state::<SettingsStore>().snapshot();
-    let threshold_bytes = megabytes_to_bytes(settings.sync.file_threshold);
     let max_bytes = megabytes_to_bytes(settings.sync.file_max_size);
 
     if !transferable || total_bytes as u64 > max_bytes {
@@ -1172,25 +1235,12 @@ async fn resolve_incoming_files(
         };
     }
 
-    if total_bytes as u64 > threshold_bytes {
-        return IncomingFiles::Deferred {
-            state: SyncFileState::Pending,
-            total_bytes,
-            file_count,
-        };
-    }
-
-    // 内联拉取失败时不阻断入库：降级为按需拉取，粘贴时重试。
-    match file_transfer::pull_files(app, &dto.content, source_device_id, files, None).await {
-        Ok(paths) => IncomingFiles::Pulled(paths),
-        Err(err) => {
-            log::warn!("sync ingest: pull files of item from {source_device_id} failed: {err}");
-            IncomingFiles::Deferred {
-                state: SyncFileState::Pending,
-                total_bytes,
-                file_count,
-            }
-        }
+    // 不再预落盘：文件在用户点粘贴时才传输到前台目录。
+    let _ = source_device_id;
+    IncomingFiles::Deferred {
+        state: SyncFileState::Pending,
+        total_bytes,
+        file_count,
     }
 }
 
@@ -1243,19 +1293,13 @@ pub async fn ingest_remote_item(
     let mut height = dto.height;
     let mut size = dto.size;
 
-    // files：远端路径本机不可用时按阈值决定内联拉取，或登记状态留待粘贴时拉取。
+    // files：只登记指纹与状态，字节留到用户粘贴时传输到前台目录。
     let files_plan = if kind == ClipboardKind::Files {
         resolve_incoming_files(app, source_device_id, dto).await
     } else {
         IncomingFiles::Ignore
     };
     let deferred_files = match files_plan {
-        IncomingFiles::Pulled(paths) => {
-            if !paths.is_empty() {
-                content = paths.join("\n");
-            }
-            None
-        }
         IncomingFiles::Deferred {
             state,
             total_bytes,
@@ -1631,6 +1675,8 @@ struct GatheredFile {
     is_dir: bool,
     size: i64,
     mtime_ms: Option<i64>,
+    /// 创建时间（Unix 毫秒）；接收端落盘后据此还原本地文件的创建时间。
+    ctime_ms: Option<i64>,
 }
 
 /// 单个顶层条目的枚举结果。
@@ -1639,6 +1685,10 @@ struct GatheredRoot {
     is_dir: bool,
     /// 目录是否完整枚举；普通文件恒为 `true`。
     complete: bool,
+    /// 顶层行的修改时间；目录用它还原目录本身的修改时间。
+    mtime_ms: Option<i64>,
+    /// 顶层行的创建时间；目录用它还原目录本身的创建时间。
+    ctime_ms: Option<i64>,
     files: Vec<GatheredFile>,
 }
 
@@ -1682,6 +1732,8 @@ fn collect_file_fingerprints(
                     source: path.to_owned(),
                     is_dir: true,
                     complete,
+                    mtime_ms: file_mtime_ms(&meta),
+                    ctime_ms: file_ctime_ms(&meta),
                     files,
                 });
             }
@@ -1692,12 +1744,15 @@ fn collect_file_fingerprints(
                     source: path.to_owned(),
                     is_dir: false,
                     complete: true,
+                    mtime_ms: file_mtime_ms(&meta),
+                    ctime_ms: file_ctime_ms(&meta),
                     files: vec![GatheredFile {
                         source: path.to_owned(),
                         rel_path: None,
                         is_dir: false,
                         size,
                         mtime_ms: file_mtime_ms(&meta),
+                        ctime_ms: file_ctime_ms(&meta),
                     }],
                 });
             }
@@ -1706,6 +1761,8 @@ fn collect_file_fingerprints(
                 source: path.to_owned(),
                 is_dir: false,
                 complete: false,
+                mtime_ms: None,
+                ctime_ms: None,
                 files: Vec::new(),
             }),
         }
@@ -1716,12 +1773,13 @@ fn collect_file_fingerprints(
 
     for (index, root) in roots.into_iter().enumerate() {
         if root.is_dir {
-            // 目录根只带路径与完整标记，字节由子树文件承担。
+            // 目录根只带路径与完整标记，字节由子树文件承担；时间用于还原目录本身。
             entries.push(SyncFileEntryDto {
                 path: root.source,
                 is_dir: true,
                 size: None,
-                mtime_ms: None,
+                mtime_ms: root.mtime_ms,
+                ctime_ms: root.ctime_ms,
                 head_hash: None,
                 hash: None,
                 root_index: Some(index),
@@ -1737,6 +1795,7 @@ fn collect_file_fingerprints(
                 is_dir,
                 size,
                 mtime_ms,
+                ctime_ms,
             } = file;
 
             if is_dir {
@@ -1745,7 +1804,8 @@ fn collect_file_fingerprints(
                     path: source,
                     is_dir: true,
                     size: None,
-                    mtime_ms: None,
+                    mtime_ms,
+                    ctime_ms,
                     head_hash: None,
                     hash: None,
                     root_index: Some(index),
@@ -1772,6 +1832,7 @@ fn collect_file_fingerprints(
                 is_dir: false,
                 size: Some(size),
                 mtime_ms,
+                ctime_ms,
                 head_hash: head_digest,
                 hash,
                 root_index: Some(index),
@@ -1835,6 +1896,8 @@ fn walk_directory_inner(
             if *remaining == 0 {
                 return false;
             }
+            // 目录本身的时间也采集下来，接收端才能还原空目录 / 目录层的时间戳。
+            let dir_meta = entry.metadata().ok();
             // 嵌套目录本身也进清单：空目录没有子文件，只能靠这条还原本地结构。
             if let Some(rel_path) = relative_path_string(&rel) {
                 out.push(GatheredFile {
@@ -1842,7 +1905,8 @@ fn walk_directory_inner(
                     rel_path: Some(rel_path),
                     is_dir: true,
                     size: 0,
-                    mtime_ms: None,
+                    mtime_ms: dir_meta.as_ref().and_then(file_mtime_ms),
+                    ctime_ms: dir_meta.as_ref().and_then(file_ctime_ms),
                 });
                 *remaining -= 1;
             } else {
@@ -1880,6 +1944,7 @@ fn walk_directory_inner(
             is_dir: false,
             size: meta.len() as i64,
             mtime_ms: file_mtime_ms(&meta),
+            ctime_ms: file_ctime_ms(&meta),
         });
         *remaining -= 1;
     }
@@ -1944,6 +2009,39 @@ fn file_mtime_ms(meta: &std::fs::Metadata) -> Option<i64> {
     let since_epoch = modified.duration_since(std::time::UNIX_EPOCH).ok()?;
 
     i64::try_from(since_epoch.as_millis()).ok()
+}
+
+/// 文件创建时间（Unix 毫秒）。
+///
+/// 平台差异：
+/// - Windows 的 `creation_time` 以 1601-01-01 为起点、单位 100ns，需先换算到 Unix 纪元；
+/// - macOS 用 `st_birthtime` + `st_birthtime_nsec` 组合出毫秒；
+/// - 其它平台返回 `None`，接收端保持本地默认创建时间。
+fn file_ctime_ms(meta: &std::fs::Metadata) -> Option<i64> {
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::fs::MetadataExt;
+
+        // 1601-01-01 到 1970-01-01 的 100ns 间隔数。
+        const EPOCH_DIFF_100NS: i64 = 116_444_736_000_000_000;
+        let intervals = i64::try_from(meta.creation_time()).ok()?;
+
+        return Some(intervals.checked_sub(EPOCH_DIFF_100NS)? / 10_000);
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        use std::os::macos::fs::MetadataExt;
+
+        let secs = i64::checked_mul(meta.st_birthtime(), 1000)?;
+        return Some(secs + i64::from(meta.st_birthtime_nsec()) / 1_000_000);
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        let _ = meta;
+        None
+    }
 }
 
 /// 读文件头部做 blake3；不可读时返回 `None`（接收端按仅路径处理）。

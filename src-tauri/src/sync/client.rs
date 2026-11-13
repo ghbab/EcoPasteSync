@@ -11,10 +11,11 @@ use crate::core::{AppError, Result};
 use crate::sync::crypto;
 use crate::sync::devices::{self, SyncDeviceRecord};
 use crate::sync::protocol::{
-    file_chunk_signature_target, pull_signature_target, DeviceInfoDto, NearbyDeviceDto,
-    PairAcceptedDto, PairRequestDto, PairStatusDto, SyncClipboardItemDto, API_CLIPBOARD_PULL,
-    API_CLIPBOARD_PUSH, API_FILE_CHUNK, API_IMAGE, API_INFO, API_PAIR, API_PAIR_STATUS, API_VERIFY,
-    HEADER_DEVICE_ID, HEADER_SIGNATURE, HEADER_TIMESTAMP,
+    bump_signature_target, file_chunk_signature_target, pull_signature_target, DeviceInfoDto,
+    NearbyDeviceDto, PairAcceptedDto, PairRequestDto, PairStatusDto, SyncClipboardItemDto,
+    API_CLIPBOARD_BUMP, API_CLIPBOARD_PULL, API_CLIPBOARD_PUSH, API_FILE_CHUNK, API_IMAGE,
+    API_INFO, API_PAIR, API_PAIR_STATUS, API_VERIFY, HEADER_DEVICE_ID, HEADER_SIGNATURE,
+    HEADER_TIMESTAMP,
 };
 use crate::sync::{emit_pair_result, emit_pair_sas, NearbyEntry, SyncManager};
 
@@ -381,6 +382,73 @@ pub async fn push_item(
         )));
     }
     Ok(())
+}
+
+/// 通知对端把某条 files 记录置顶（远端重复复制同一批文件时使用）。
+///
+/// 返回对端是否命中该条目：`false` 表示对端没有这条记录，调用方应改用
+/// [`push_item`] 推送完整条目，避免只发置顶通知却什么都没发生。
+pub async fn send_bump(
+    app: &AppHandle,
+    shared_key_hex: &str,
+    address: &str,
+    content_hash: &str,
+) -> Result<bool> {
+    let key = crypto::key_from_hex(shared_key_hex)?;
+    let manager = app.state::<std::sync::Arc<SyncManager>>();
+    let self_id = manager.device_id().to_owned();
+
+    let signature_target = bump_signature_target(content_hash);
+    let timestamp = now_unix();
+    let signature = crypto::sign_request(&key, &self_id, timestamp, &signature_target);
+
+    let client = client()?;
+    let url = format!("http://{address}{API_CLIPBOARD_BUMP}?hash={content_hash}");
+    let resp = client
+        .post(&url)
+        .header(HEADER_DEVICE_ID, &self_id)
+        .header(HEADER_TIMESTAMP, timestamp.to_string())
+        .header(HEADER_SIGNATURE, &signature)
+        .send()
+        .await
+        .map_err(|err| AppError::Other(anyhow::anyhow!("post to {url} failed: {err}")))?;
+
+    // 旧版本对端没有 bump 端点：按「未命中」处理，由调用方改用完整推送。
+    if resp.status() == reqwest::StatusCode::NOT_FOUND
+        || resp.status() == reqwest::StatusCode::METHOD_NOT_ALLOWED
+    {
+        return Ok(false);
+    }
+
+    if !resp.status().is_success() {
+        return Err(AppError::Other(anyhow::anyhow!(
+            "bump to {url} returned {}",
+            resp.status()
+        )));
+    }
+
+    // 服务端在密封响应里回传 hit：false 表示对端没有该条目。
+    let sealed = resp
+        .bytes()
+        .await
+        .map_err(|err| AppError::Other(anyhow::anyhow!("read body from {url} failed: {err}")))?;
+    let plain = crypto::open(&key, &sealed)?;
+
+    /// 置顶响应体；旧版本对端不带 hit 字段时按「已命中」处理。
+    #[derive(serde::Deserialize)]
+    struct BumpResponse {
+        #[serde(default = "default_bump_hit")]
+        hit: bool,
+    }
+
+    fn default_bump_hit() -> bool {
+        true
+    }
+
+    let parsed: BumpResponse =
+        serde_json::from_slice(&plain).map_err(|err| AppError::Other(err.into()))?;
+
+    Ok(parsed.hit)
 }
 
 /// 拉取远端图片原图字节（加密 + 认证）。

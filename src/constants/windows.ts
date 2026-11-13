@@ -15,6 +15,10 @@ export const WINDOW_LABEL = {
    */
   CONTEXT_SUBMENU: "context-submenu",
   /**
+   * 局域网文件传输进度窗口（桌面居中置顶，参照系统复制对话框）。
+   */
+  FILE_TRANSFER: "file-transfer",
+  /**
    * 首次启动引导窗口。
    */
   ONBOARDING: "onboarding",

@@ -31,6 +31,8 @@ pub const API_VERIFY: &str = "/api/verify";
 pub const API_CLIPBOARD_PUSH: &str = "/api/clipboard/push";
 /// 加密端点：按时间游标增量拉取剪贴板条目。
 pub const API_CLIPBOARD_PULL: &str = "/api/clipboard/pull";
+/// 加密端点：通知对端把某条已有记录置顶（远端重复复制同一批文件时使用）。
+pub const API_CLIPBOARD_BUMP: &str = "/api/clipboard/bump";
 /// 加密端点：拉取图片原图字节。
 pub const API_IMAGE: &str = "/api/image";
 /// 加密端点：按块拉取文件内容（参数走 query：`path` / `offset` / `len`）。
@@ -153,6 +155,10 @@ pub struct SyncFileEntryDto {
     pub size: Option<i64>,
     /// 修改时间（Unix 毫秒），拉取前用它快速判断源文件是否已变。
     pub mtime_ms: Option<i64>,
+    /// 创建时间（Unix 毫秒）；落盘后接收端会把本地文件的创建时间还原成该值。
+    /// 旧版本发送端没有该字段，缺失时接收端保持本地默认时间。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ctime_ms: Option<i64>,
     /// 文件头部 64KB 的 blake3 hex，低成本校验内容未被替换。
     pub head_hash: Option<String>,
     /// 整文件 blake3 hex；只对需要按需拉取的条目采集，拉取完成后用它校验完整性。
@@ -219,6 +225,11 @@ pub struct SyncClipboardItemDto {
     pub platform: String,
     /// 发送方的创建时间（RFC3339），接收方用于排序与 pull 游标推进。
     pub created_at: String,
+}
+
+/// 置顶端点签名串：内容哈希参与签名，避免重放签名置顶任意条目。
+pub fn bump_signature_target(content_hash: &str) -> String {
+    format!("{API_CLIPBOARD_BUMP}|{content_hash}")
 }
 
 /// 附近设备快照项（发现层 → 前端）。

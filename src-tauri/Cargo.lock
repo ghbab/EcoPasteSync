@@ -19,6 +19,7 @@ dependencies = [
  "file_icon_provider",
  "image",
  "keyring",
+ "libc",
  "log",
  "mdns-sd",
  "objc2",

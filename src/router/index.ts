@@ -1,6 +1,7 @@
 import { createHashRouter } from "react-router";
 import Clipboard from "@/pages/Clipboard";
 import ContextMenu, { ContextSubmenu } from "@/pages/ContextMenu";
+import FileTransfer from "@/pages/FileTransfer";
 import Onboarding from "@/pages/Onboarding";
 import PairRequest from "@/pages/PairRequest";
 import Preference from "@/pages/Preference";
@@ -34,5 +35,9 @@ export const router = createHashRouter([
   {
     Component: PairRequest,
     path: "/pair-request",
+  },
+  {
+    Component: FileTransfer,
+    path: "/file-transfer",
   },
 ]);

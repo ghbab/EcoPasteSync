@@ -1568,3 +1568,116 @@ export const refreshSyncDevices = () => {
     "commands:labels.refreshSyncDevices",
   );
 };
+
+/**
+ * 远端文件传输任务快照（与 Rust `TransferSnapshot` 字段一一对应）。
+ */
+export interface FileTransferSnapshot {
+  jobId: string;
+  itemId: string;
+  /** queued / running / paused / failed / done / cancelled / conflicts */
+  status: string;
+  targetDir: string;
+  fileName: string | null;
+  fileIndex: number;
+  fileCount: number;
+  transferredBytes: number;
+  totalBytes: number;
+  speedBps: number;
+  error: string | null;
+  /** 与目标目录同名的顶层路径，等待用户选择覆盖策略 */
+  conflicts: string[];
+  done: boolean;
+}
+
+/**
+ * 读取最近一次传输任务快照：传输窗口首帧加载时补齐可能错过的事件。
+ */
+export const getLatestFileTransfer = () => {
+  return call<FileTransferSnapshot | null>(
+    TAURI_COMMAND.GET_LATEST_FILE_TRANSFER,
+    "commands:labels.fileTransfer",
+  );
+};
+
+/**
+ * 按任务 id 读取快照。
+ */
+export const getFileTransferSnapshot = (jobId: string) => {
+  return call<FileTransferSnapshot | null>(
+    TAURI_COMMAND.GET_FILE_TRANSFER_SNAPSHOT,
+    "commands:labels.fileTransfer",
+    { jobId },
+  );
+};
+
+/**
+ * 暂停传输（保留临时文件，可继续）。
+ */
+export const pauseFileTransfer = (jobId: string) => {
+  return call<void>(
+    TAURI_COMMAND.PAUSE_FILE_TRANSFER,
+    "commands:labels.fileTransfer",
+    { jobId },
+  );
+};
+
+/**
+ * 继续传输（从断点续传）。
+ */
+export const resumeFileTransfer = (jobId: string) => {
+  return call<void>(
+    TAURI_COMMAND.RESUME_FILE_TRANSFER,
+    "commands:labels.fileTransfer",
+    { jobId },
+  );
+};
+
+/**
+ * 取消传输：删除临时文件并结束任务。
+ */
+export const cancelFileTransfer = (jobId: string) => {
+  return call<void>(
+    TAURI_COMMAND.CANCEL_FILE_TRANSFER,
+    "commands:labels.fileTransfer",
+    { jobId },
+  );
+};
+
+/**
+ * 解决同名冲突：`policy` 为 overwrite / skip / keepBoth / custom；
+ * custom 时 `overwrite` 列出需要覆盖的冲突路径，其余保留两者。
+ */
+export const resolveFileTransferConflicts = (
+  jobId: string,
+  policy: string,
+  overwrite?: string[],
+) => {
+  return call<void>(
+    TAURI_COMMAND.RESOLVE_FILE_TRANSFER_CONFLICTS,
+    "commands:labels.fileTransfer",
+    { jobId, overwrite, policy },
+  );
+};
+
+/**
+ * 失败后改存到其它目录。
+ */
+export const retryFileTransferToDir = (jobId: string, directory: string) => {
+  return call<void>(
+    TAURI_COMMAND.RETRY_FILE_TRANSFER_TO_DIR,
+    "commands:labels.fileTransfer",
+    { directory, jobId },
+  );
+};
+
+/**
+ * 兜底：只把远端原始路径写到剪贴板，不传输文件。
+ */
+export const copyFileTransferPaths = (jobId: string) => {
+  return call<void>(
+    TAURI_COMMAND.COPY_FILE_TRANSFER_PATHS,
+    "commands:labels.fileTransfer",
+    { jobId },
+  );
+};

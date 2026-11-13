@@ -1,3 +1,4 @@
+pub mod foreground;
 pub mod lifecycle;
 pub(super) mod position;
 pub mod preview;
@@ -25,6 +26,8 @@ pub const PREFERENCE_WINDOW_LABEL: &str = "preference";
 pub const CLIPBOARD_PREVIEW_WINDOW_LABEL: &str = "clipboard-preview";
 pub const ONBOARDING_WINDOW_LABEL: &str = "onboarding";
 pub const PAIR_REQUEST_WINDOW_LABEL: &str = "pair-request";
+/// 文件传输进度窗口：参照 Windows 复制对话框，自绘无边框卡片。
+pub const FILE_TRANSFER_WINDOW_LABEL: &str = "file-transfer";
 
 /// 偏好页定位高亮事件。前端收到后切到目标设置项所在分类并滚动高亮。
 const PREFERENCE_HIGHLIGHT_EVENT: &str = "preference://highlight-setting";
@@ -122,8 +125,12 @@ pub fn show_window(app_handle: &AppHandle, label: &str) -> Result<()> {
         if let Err(err) = apply_clipboard_window_layout(app_handle) {
             log::warn!("apply clipboard window layout failed: {err}");
         }
-    } else if label == ONBOARDING_WINDOW_LABEL || label == PAIR_REQUEST_WINDOW_LABEL {
-        // 引导与配对请求都是居中弹出的临时窗口：每次显示都重新居中，不恢复上次位置。
+    } else if label == ONBOARDING_WINDOW_LABEL
+        || label == PAIR_REQUEST_WINDOW_LABEL
+        || label == FILE_TRANSFER_WINDOW_LABEL
+    {
+        // 引导、配对请求与文件传输都是居中弹出的临时窗口：每次显示都重新居中，
+        // 不恢复上次位置（它们也没有需要持久化的位置状态）。
         if let Err(err) = position_window(app_handle, label, WindowPosition::Center) {
             log::warn!("center {label} window failed: {err}");
         }
@@ -331,6 +338,51 @@ pub fn build_onboarding_window(app_handle: &AppHandle) -> Result<()> {
     .map_err(|err| anyhow::anyhow!("build onboarding window: {err}"))?;
 
     Ok(())
+}
+
+/// 按需创建文件传输进度窗口。无边框 + 透明，由前端自绘；可最小化但不进任务栏。
+pub fn build_file_transfer_window(app_handle: &AppHandle) -> Result<()> {
+    if app_handle
+        .get_webview_window(FILE_TRANSFER_WINDOW_LABEL)
+        .is_some()
+    {
+        return Ok(());
+    }
+
+    WebviewWindowBuilder::new(
+        app_handle,
+        FILE_TRANSFER_WINDOW_LABEL,
+        WebviewUrl::App("index.html/#/file-transfer".into()),
+    )
+    .title("EcoPasteSync Transfer")
+    .inner_size(460.0, 280.0)
+    .center()
+    .resizable(false)
+    .maximizable(false)
+    .minimizable(true)
+    .decorations(false)
+    .transparent(true)
+    .always_on_top(true)
+    .skip_taskbar(true)
+    .accept_first_mouse(true)
+    .disable_drag_drop_handler()
+    .visible(false)
+    .build()
+    .map_err(|err| anyhow::anyhow!("build file transfer window: {err}"))?;
+
+    Ok(())
+}
+
+/// 显示文件传输窗口：不存在时先创建，再统一走 `show_window` 的定位逻辑。
+pub fn show_file_transfer_window(app_handle: &AppHandle) -> Result<()> {
+    if app_handle
+        .get_webview_window(FILE_TRANSFER_WINDOW_LABEL)
+        .is_none()
+    {
+        build_file_transfer_window(app_handle)?;
+    }
+
+    show_window(app_handle, FILE_TRANSFER_WINDOW_LABEL)
 }
 
 /// 按需创建配对请求窗口。无边框 + 透明，由前端自绘卡片；始终置顶、不抢任务栏。

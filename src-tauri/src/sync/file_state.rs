@@ -1,7 +1,8 @@
 //! 同步文件条目的传输状态仓储（`sync_file_states`）。
 //!
 //! 只有「超过本体传输阈值、仅同步路径」的文件条目才会落库：接收端据此知道哪些
-//! 条目仍可按需拉取。传输不做断点续传，任何中断都丢弃半成品、下次从头再拉。
+//! 条目仍可按需拉取。真正的传输进度由 `sync_transfer_jobs` 记录并支持断点续传，
+//! 本表只保存远端清单、上次落盘的本地路径与副本指纹。
 
 use anyhow::Context;
 use chrono::Utc;
@@ -44,8 +45,10 @@ pub struct SyncFileRecord {
     pub state: SyncFileState,
     /// 发送端推送的每文件指纹（JSON），按需拉取的唯一依据。
     pub files_json: Option<String>,
-    /// 最近一次拉取成功后的本地缓存路径列表（JSON）。
+    /// 最近一次传输成功后的本地路径列表（JSON），重复粘贴时用于判断副本是否可复用。
     pub local_paths_json: Option<String>,
+    /// 本地副本的指纹快照（JSON）：路径 + 大小 + 修改时间，用于判断副本是否被用户改过。
+    pub local_manifest_json: Option<String>,
 }
 
 /// 写入（或覆盖）一条文件条目的传输状态。重复收到同一条目时以最新快照为准。
@@ -69,7 +72,13 @@ pub async fn upsert(
          device_id = excluded.device_id, state = excluded.state, \
          total_bytes = excluded.total_bytes, chunk_size = excluded.chunk_size, \
          file_count = excluded.file_count, files_json = excluded.files_json, \
-         local_paths_json = NULL, updated_at = excluded.updated_at",
+         local_paths_json = CASE \
+             WHEN sync_file_states.files_json = excluded.files_json \
+             THEN sync_file_states.local_paths_json ELSE NULL END, \
+         local_manifest_json = CASE \
+             WHEN sync_file_states.files_json = excluded.files_json \
+             THEN sync_file_states.local_manifest_json ELSE NULL END, \
+         updated_at = excluded.updated_at",
     )
     .bind(item_id)
     .bind(device_id)
@@ -89,8 +98,17 @@ pub async fn upsert(
 
 /// 读取条目对应的远端文件状态；本机条目返回 `None`。
 pub async fn find(pool: &SqlitePool, item_id: &str) -> Result<Option<SyncFileRecord>> {
-    let row = sqlx::query_as::<_, (String, String, Option<String>, Option<String>)>(
-        "SELECT device_id, state, files_json, local_paths_json \
+    let row = sqlx::query_as::<
+        _,
+        (
+            String,
+            String,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+        ),
+    >(
+        "SELECT device_id, state, files_json, local_paths_json, local_manifest_json \
          FROM sync_file_states WHERE item_id = ?",
     )
     .bind(item_id)
@@ -99,30 +117,34 @@ pub async fn find(pool: &SqlitePool, item_id: &str) -> Result<Option<SyncFileRec
     .context("failed to query sync file state")?;
 
     Ok(row.map(
-        |(device_id, state, files_json, local_paths_json)| SyncFileRecord {
+        |(device_id, state, files_json, local_paths_json, local_manifest_json)| SyncFileRecord {
             device_id,
             state: SyncFileState::from_tag(&state),
             files_json,
             local_paths_json,
+            local_manifest_json,
         },
     ))
 }
 
-/// 记录拉取成功后的本地缓存路径，后续粘贴可直接复用。
-pub async fn set_local_paths(
+/// 记录传输成功后的本地路径与副本指纹，后续粘贴可直接复用本地副本。
+pub async fn set_local_snapshot(
     pool: &SqlitePool,
     item_id: &str,
     local_paths_json: &str,
+    local_manifest_json: &str,
 ) -> Result<()> {
     sqlx::query(
-        "UPDATE sync_file_states SET local_paths_json = ?, updated_at = ? WHERE item_id = ?",
+        "UPDATE sync_file_states SET local_paths_json = ?, local_manifest_json = ?, \
+         updated_at = ? WHERE item_id = ?",
     )
     .bind(local_paths_json)
+    .bind(local_manifest_json)
     .bind(Utc::now())
     .bind(item_id)
     .execute(pool)
     .await
-    .context("failed to update sync file local paths")?;
+    .context("failed to update sync file local snapshot")?;
 
     Ok(())
 }

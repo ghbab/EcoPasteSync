@@ -123,7 +123,9 @@ fn write_files(ctx: &ClipboardContext, guard: &WritebackGuard, item: &ClipboardI
         return Err(AppError::Clipboard("no files to write".to_owned()));
     }
 
-    guard.suppress(item.content_hash.clone());
+    // 必须按「实际写入的路径」重算哈希：粘贴前条目 content 可能已被替换，
+    // 沿用入库时的 content_hash 会让抑制失效，OS 监听会把这次写入当成新内容再入一条。
+    guard.suppress(content_hash(ClipboardKind::Files, &item.content));
     ctx.set_files(paths).map_err(clip_err)?;
     Ok(())
 }

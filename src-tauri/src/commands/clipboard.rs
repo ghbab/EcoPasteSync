@@ -372,7 +372,7 @@ pub async fn write_to_clipboard(
     plain: bool,
 ) -> Result<()> {
     let pool = db.pool().await;
-    let mut item = find_item_by_id(&pool, &id)
+    let item = find_item_by_id(&pool, &id)
         .await?
         .ok_or_else(|| AppError::Clipboard(format!("clipboard item not found: {id}")))?;
 
@@ -381,14 +381,17 @@ pub async fn write_to_clipboard(
         should_write_plain_for_copy(plain, item.kind, settings.clipboard.content.copy_plain);
     let hide_after_copy = settings.clipboard.content.copy_then_hide_window;
 
-    // 远端 files 条目：先把文件拉到本地缓存，把 content 换成真实可用的本地路径。
-    if !write_plain {
-        if let Some(paths) = crate::sync::ensure_files_local(&app, &item).await? {
-            item.content = paths.join("\n");
-        }
-    }
+    // 远端 files 条目：复制按钮不传输文件，只把远端原始路径作为文本写入剪贴板。
+    // 本机条目维持原有行为（文件条目写 CF_HDROP / file URL）。
+    let remote_files = crate::sync::file_transfer::remote_device_of(&app, &item)
+        .await?
+        .is_some();
 
-    crate::clipboard::write_to_clipboard(&store, guard.inner().as_ref(), &item, write_plain)?;
+    if remote_files {
+        crate::clipboard::write_to_clipboard(&store, guard.inner().as_ref(), &item, true)?;
+    } else {
+        crate::clipboard::write_to_clipboard(&store, guard.inner().as_ref(), &item, write_plain)?;
+    }
     mark_item_reused_if_enabled(&app, &pool, &id, item.kind).await?;
 
     if hide_after_copy {
@@ -415,7 +418,7 @@ pub async fn paste_clipboard_item(
     plain: bool,
 ) -> Result<()> {
     let pool = db.pool().await;
-    let mut item = find_item_by_id(&pool, &id)
+    let item = find_item_by_id(&pool, &id)
         .await?
         .ok_or_else(|| AppError::Clipboard(format!("clipboard item not found: {id}")))?;
 
@@ -427,14 +430,38 @@ pub async fn paste_clipboard_item(
         settings.clipboard.content.paste_files_as_path,
     );
 
-    // 远端 files 条目：粘贴前先按需传输文件本体（进度经事件上报前端）。
-    if !write_plain {
-        if let Some(paths) = crate::sync::ensure_files_local(&app, &item).await? {
-            item.content = paths.join("\n");
+    // 远端 files 条目：
+    // - 前台是资源管理器 → 记录其当前目录，直接把文件传输过去，不模拟 Ctrl+V；
+    // - 其它窗口（或用户选择「粘贴为路径」）→ 降级为写远端原始路径文本，再模拟粘贴。
+    let remote_files = crate::sync::file_transfer::remote_device_of(&app, &item)
+        .await?
+        .is_some();
+
+    if remote_files && !write_plain {
+        if let Some(directory) = crate::window::foreground::explorer_directory() {
+            crate::sync::file_transfer::start_paste_transfer(&app, &item, directory).await?;
+            mark_item_reused_if_enabled(&app, &pool, &id, item.kind).await?;
+
+            // 文件已直接落盘，不需要再向目标窗口发送按键；只负责把剪贴板面板收起。
+            if window::is_clipboard_window_pinned() {
+                #[cfg(target_os = "macos")]
+                if let Err(err) = window::macos::resign_clipboard_panel_key(&app) {
+                    log::warn!("resign clipboard panel key before transfer failed: {err:?}");
+                }
+            } else if let Err(err) = window::hide_window(&app, CLIPBOARD_WINDOW_LABEL) {
+                log::warn!("hide clipboard window before transfer failed: {err:?}");
+            }
+
+            return Ok(());
         }
     }
 
-    crate::clipboard::write_to_clipboard(&store, guard.inner().as_ref(), &item, write_plain)?;
+    if remote_files {
+        // 降级：只写远端原始路径文本（本机可能不存在该路径，用户已知并接受）。
+        crate::clipboard::write_to_clipboard(&store, guard.inner().as_ref(), &item, true)?;
+    } else {
+        crate::clipboard::write_to_clipboard(&store, guard.inner().as_ref(), &item, write_plain)?;
+    }
     mark_item_reused_if_enabled(&app, &pool, &id, item.kind).await?;
 
     if window::is_clipboard_window_pinned() {
