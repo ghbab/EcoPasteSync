@@ -26,7 +26,7 @@ pub fn apply_times(
 
     #[cfg(target_os = "macos")]
     {
-        return macos_impl::apply(path, mtime_ms, ctime_ms);
+        macos_impl::apply(path, mtime_ms, ctime_ms)
     }
 
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
@@ -172,6 +172,16 @@ mod macos_impl {
     }
 }
 
+/// 判断远端时间与本地时间是否在容差内（±2 秒）。
+///
+/// 不同文件系统的时间精度不同（FAT 只有 2 秒），精确相等会把「未修改」
+/// 误判成「已修改」，因此留出容差。
+pub fn mtime_close(remote_ms: i64, local_ms: i64) -> bool {
+    const TOLERANCE_MS: i64 = 2_000;
+
+    remote_ms.saturating_sub(local_ms).abs() <= TOLERANCE_MS
+}
+
 #[cfg(test)]
 mod tests {
     /// 时间还原的容差判断：修改时间允许 ±2 秒误差。
@@ -181,14 +191,4 @@ mod tests {
         assert!(crate::sync::file_time::mtime_close(1_000_000, 1_002_000));
         assert!(!crate::sync::file_time::mtime_close(1_000_000, 1_002_001));
     }
-}
-
-/// 判断远端时间与本地时间是否在容差内（±2 秒）。
-///
-/// 不同文件系统的时间精度不同（FAT 只有 2 秒），精确相等会把「未修改」
-/// 误判成「已修改」，因此留出容差。
-pub fn mtime_close(remote_ms: i64, local_ms: i64) -> bool {
-    const TOLERANCE_MS: i64 = 2_000;
-
-    remote_ms.saturating_sub(local_ms).abs() <= TOLERANCE_MS
 }

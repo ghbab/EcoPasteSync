@@ -45,8 +45,6 @@ pub struct SyncFileRecord {
     pub state: SyncFileState,
     /// 发送端推送的每文件指纹（JSON），按需拉取的唯一依据。
     pub files_json: Option<String>,
-    /// 最近一次传输成功后的本地路径列表（JSON），重复粘贴时用于判断副本是否可复用。
-    pub local_paths_json: Option<String>,
     /// 本地副本的指纹快照（JSON）：路径 + 大小 + 修改时间，用于判断副本是否被用户改过。
     pub local_manifest_json: Option<String>,
 }
@@ -98,17 +96,8 @@ pub async fn upsert(
 
 /// 读取条目对应的远端文件状态；本机条目返回 `None`。
 pub async fn find(pool: &SqlitePool, item_id: &str) -> Result<Option<SyncFileRecord>> {
-    let row = sqlx::query_as::<
-        _,
-        (
-            String,
-            String,
-            Option<String>,
-            Option<String>,
-            Option<String>,
-        ),
-    >(
-        "SELECT device_id, state, files_json, local_paths_json, local_manifest_json \
+    let row = sqlx::query_as::<_, (String, String, Option<String>, Option<String>)>(
+        "SELECT device_id, state, files_json, local_manifest_json \
          FROM sync_file_states WHERE item_id = ?",
     )
     .bind(item_id)
@@ -117,11 +106,10 @@ pub async fn find(pool: &SqlitePool, item_id: &str) -> Result<Option<SyncFileRec
     .context("failed to query sync file state")?;
 
     Ok(row.map(
-        |(device_id, state, files_json, local_paths_json, local_manifest_json)| SyncFileRecord {
+        |(device_id, state, files_json, local_manifest_json)| SyncFileRecord {
             device_id,
             state: SyncFileState::from_tag(&state),
             files_json,
-            local_paths_json,
             local_manifest_json,
         },
     ))

@@ -26,9 +26,6 @@ pub enum CommandKey {
     DragTextEmpty,
     ExternalUrlUnsupported,
     SyncDisabled,
-    SyncFileUnavailable,
-    SyncFileTransferFailed,
-    SyncFileTransferBusy,
 }
 
 #[derive(Debug, Clone, Copy)]

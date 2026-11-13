@@ -25,7 +25,7 @@ pub fn explorer_directory() -> Option<PathBuf> {
 
     #[cfg(target_os = "macos")]
     {
-        return macos_impl::explorer_directory();
+        macos_impl::explorer_directory()
     }
 
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]

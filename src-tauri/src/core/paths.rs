@@ -30,8 +30,6 @@ const RESOURCES_DIR: &str = "resources";
 const CONFIG_DIR: &str = "config";
 /// 本机运行状态目录名，挂在 [`app_data_dir`] 下。
 const STATE_DIR: &str = "state";
-/// 可再生缓存目录名，挂在 [`app_data_dir`] 下。
-const CACHE_DIR: &str = "cache";
 /// 固定留在 `<app_local_data>/<env>` 的 bootstrap manifest 文件名。
 const STORAGE_MANIFEST_FILENAME: &str = "storage.json";
 /// 写入真实数据根的 identity manifest 文件名，用于识别 EcoPaste 数据目录。
@@ -256,11 +254,6 @@ pub fn config_dir(app: &AppHandle) -> Result<PathBuf> {
 /// `<app_data_dir>/state`：窗口位置等本机运行状态目录。
 pub fn state_dir(app: &AppHandle) -> Result<PathBuf> {
     Ok(app_data_dir(app)?.join(STATE_DIR))
-}
-
-/// `<app_data_dir>/cache`：可随时重建的缓存目录（同步文件缓存等），不参与数据迁移。
-pub fn cache_dir(app: &AppHandle) -> Result<PathBuf> {
-    Ok(app_data_dir(app)?.join(CACHE_DIR))
 }
 
 fn storage_manifest_path(bootstrap: &Path) -> PathBuf {

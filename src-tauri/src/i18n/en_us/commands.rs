@@ -8,10 +8,5 @@ pub fn label(key: Key) -> &'static str {
         Key::DragTextEmpty => "Text content is empty",
         Key::ExternalUrlUnsupported => "Only links starting with http or https can be opened",
         Key::SyncDisabled => "Sync is not enabled",
-        Key::SyncFileUnavailable => {
-            "This remote file cannot be transferred (too large or too many files)"
-        }
-        Key::SyncFileTransferFailed => "Remote file transfer failed",
-        Key::SyncFileTransferBusy => "This file is already being transferred",
     }
 }

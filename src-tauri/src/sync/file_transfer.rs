@@ -1099,6 +1099,8 @@ async fn pull_remote_file(
 
     let mut handle = match tokio::fs::OpenOptions::new()
         .create(true)
+        // 续传要靠已有前缀重建哈希，必须保留文件原内容，不能截断。
+        .truncate(false)
         .read(true)
         .write(true)
         .open(&tmp)
@@ -1557,7 +1559,7 @@ fn update_snapshot_target(
         snapshot.done = false;
         snapshot.clone()
     };
-    emit_snapshot(&app, &updated);
+    emit_snapshot(app, &updated);
 }
 
 /// 任务完成后延迟移除内存快照，给前端留出渲染「已完成」的时间。

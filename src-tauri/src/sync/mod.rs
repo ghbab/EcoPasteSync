@@ -909,11 +909,6 @@ pub(crate) fn current_platform_tag() -> &'static str {
 
 // ---- 模块级入口（供其它模块调用）----
 
-/// 启动时清理上次异常退出遗留的传输临时文件。
-pub async fn cleanup_interrupted_transfers(app: &AppHandle) -> Result<()> {
-    file_transfer::cleanup_on_startup(app).await
-}
-
 /// 初始化：注册管理器并按设置决定是否启动。
 pub fn init(app: &AppHandle) -> Result<()> {
     let manager = Arc::new(SyncManager::new(app)?);
@@ -1247,15 +1242,6 @@ async fn resolve_incoming_files(
 /// MB 设置值换算为字节数（文件阈值按条目内文件总大小计）。
 fn megabytes_to_bytes(value: u64) -> u64 {
     value.saturating_mul(1024 * 1024)
-}
-
-/// 把 files 条目的换行分隔路径串拆成列表。
-pub(crate) fn split_paths(content: &str) -> Vec<String> {
-    content
-        .split('\n')
-        .filter(|path| !path.is_empty())
-        .map(str::to_owned)
-        .collect()
 }
 
 /// 接收端入库远端条目：类型门控 + 图片回源拉取 + upsert + emit。
@@ -2034,7 +2020,7 @@ fn file_ctime_ms(meta: &std::fs::Metadata) -> Option<i64> {
         use std::os::macos::fs::MetadataExt;
 
         let secs = i64::checked_mul(meta.st_birthtime(), 1000)?;
-        return Some(secs + i64::from(meta.st_birthtime_nsec()) / 1_000_000);
+        Some(secs + meta.st_birthtime_nsec() / 1_000_000)
     }
 
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
