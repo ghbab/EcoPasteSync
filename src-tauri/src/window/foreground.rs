@@ -56,7 +56,10 @@ mod windows_impl {
     use winapi::um::processthreadsapi::{GetCurrentProcessId, OpenProcess};
     use winapi::um::winbase::QueryFullProcessImageNameW;
     use winapi::um::winnt::PROCESS_QUERY_LIMITED_INFORMATION;
-    use winapi::um::winuser::{GetForegroundWindow, GetWindowThreadProcessId, IsWindow};
+    use winapi::um::winuser::{
+        GetClassNameW, GetForegroundWindow, GetGUIThreadInfo, GetWindowThreadProcessId, IsWindow,
+        GUITHREADINFO,
+    };
     use windows::core::{ComInterface, BSTR};
     use windows::Win32::Foundation::SHANDLE_PTR;
     use windows::Win32::System::Com::{
@@ -129,6 +132,15 @@ mod windows_impl {
                 continue;
             }
 
+            // 焦点在地址栏 / 搜索框 / 重命名框时，用户要粘贴的是路径文本，
+            // 不能把文件传输到当前目录，直接按「粘贴为路径」处理。
+            if has_text_input_focus(value) {
+                log::info!(
+                    "foreground: explorer hwnd={value} focus is a text input, paste as plain text"
+                );
+                return None;
+            }
+
             match com_explorer_path(hwnd) {
                 Some(path) => {
                     log::info!(
@@ -144,6 +156,52 @@ mod windows_impl {
 
         log::warn!("foreground: no explorer directory found, candidates={candidates:?}");
         None
+    }
+
+    /// 判断资源管理器窗口所属线程的焦点是否落在文本输入控件上。
+    ///
+    /// 资源管理器的地址栏、搜索框、重命名框最终都是 Edit 控件；此时粘贴应当
+    /// 输出路径文本，而不是触发文件传输。
+    fn has_text_input_focus(hwnd_value: isize) -> bool {
+        let hwnd = hwnd_value as HWND;
+
+        unsafe {
+            let thread_id = GetWindowThreadProcessId(hwnd, std::ptr::null_mut());
+            if thread_id == 0 {
+                return false;
+            }
+
+            // GetGUIThreadInfo 需要调用方填写 cbSize，否则会直接失败。
+            let mut info: GUITHREADINFO = std::mem::zeroed();
+            info.cbSize = std::mem::size_of::<GUITHREADINFO>() as u32;
+
+            if GetGUIThreadInfo(thread_id, &mut info) == 0 {
+                log::info!("foreground: GetGUIThreadInfo failed for hwnd={hwnd_value}");
+                return false;
+            }
+
+            let focus = info.hwndFocus;
+            if focus.is_null() {
+                return false;
+            }
+
+            let mut buffer: [u16; 256] = [0; 256];
+            let length = GetClassNameW(focus, buffer.as_mut_ptr(), buffer.len() as i32);
+            if length <= 0 {
+                return false;
+            }
+
+            let class_name = String::from_utf16_lossy(&buffer[..length as usize]);
+            let class_name_lower = class_name.to_ascii_lowercase();
+            let is_text_input = class_name_lower.contains("edit");
+
+            // 记录实际焦点类名，便于排查不同 Windows 版本下地址栏的控件差异。
+            log::info!(
+                "foreground: explorer hwnd={hwnd_value} focus class={class_name} text_input={is_text_input}"
+            );
+
+            is_text_input
+        }
     }
 
     /// 用进程内 Shell COM（ShellWindows + IWebBrowser2）按 HWND 取目录。
