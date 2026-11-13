@@ -158,7 +158,7 @@ mod macos_impl {
         let rc = unsafe {
             libc::setattrlist(
                 c_path.as_ptr(),
-                &mut attributes,
+                &mut attributes as *mut libc::attrlist as *mut libc::c_void,
                 &created as *const libc::timespec as *mut libc::c_void,
                 std::mem::size_of::<libc::timespec>(),
                 0,

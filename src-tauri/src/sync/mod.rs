@@ -2145,6 +2145,7 @@ mod tests {
             is_dir,
             size: if is_dir { None } else { Some(1) },
             mtime_ms: None,
+            ctime_ms: None,
             head_hash: None,
             hash: None,
             root_index,
