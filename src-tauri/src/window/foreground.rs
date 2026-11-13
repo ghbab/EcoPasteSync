@@ -7,14 +7,14 @@
 //! 「不在资源管理器」并降级为粘贴路径。
 //!
 //! 平台实现：
-//! - Windows：`GetForegroundWindow` 确认进程是 `explorer.exe` 后，用系统自带的
-//!   PowerShell 调 Shell.Application COM 取与前台窗口 HWND 匹配的资源管理器路径；
+//! - Windows：`GetForegroundWindow` 确认进程是 `explorer.exe` 后，在进程内用
+//!   Shell COM（`ShellWindows` + `IWebBrowser2`）取与前台窗口 HWND 匹配的目录；
 //! - macOS：前台 App 是 Finder 时用 `osascript` 取前台 Finder 窗口的 POSIX 路径；
 //! - 任何一步取不到都返回 `None`，调用方据此降级为「只复制路径」。
 //!
-//! 之所以不在 Rust 里直接操作 Shell COM：`IShellWindows` 的接口绑定与
-//! `windows` crate 版本强相关，而这里只需要一次低频调用；用系统脚本换取
-//! 更低的维护成本，取路径失败也不影响主流程。
+//! Windows 侧不调用外部 `powershell.exe`：部分机器上它会被安全软件或组策略
+//! 直接拦截（进程以 -1 退出），导致探测必然失败；进程内 COM 只依赖系统组件，
+//! 不受这类限制。
 
 use std::path::PathBuf;
 
@@ -49,9 +49,7 @@ pub fn remember_external_foreground() {
 mod windows_impl {
     use std::mem::ManuallyDrop;
     use std::os::windows::ffi::OsStringExt;
-    use std::os::windows::process::CommandExt;
     use std::path::PathBuf;
-    use std::process::Command;
     use std::sync::Mutex;
 
     use winapi::shared::windef::HWND;
@@ -67,9 +65,6 @@ mod windows_impl {
     };
     use windows::Win32::System::Variant::{VARIANT, VARIANT_0, VARIANT_0_0, VARIANT_0_0_0, VT_I4};
     use windows::Win32::UI::Shell::{IShellWindows, IWebBrowser2, ShellWindows};
-
-    /// CREATE_NO_WINDOW：避免每次粘贴都闪出控制台窗口。
-    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
     /// 最近一次「非本进程」的前台窗口。
     ///
@@ -134,7 +129,7 @@ mod windows_impl {
                 continue;
             }
 
-            match query_explorer_path(hwnd) {
+            match com_explorer_path(hwnd) {
                 Some(path) => {
                     log::info!(
                         "foreground: resolved explorer directory {path:?} from hwnd={value}"
@@ -149,18 +144,6 @@ mod windows_impl {
 
         log::warn!("foreground: no explorer directory found, candidates={candidates:?}");
         None
-    }
-
-    /// 查询指定资源管理器窗口当前的目录。
-    ///
-    /// 优先走进程内 Shell COM：外部 `powershell.exe` 在部分机器上会被安全软件或
-    /// 策略拦截，直接以 -1 退出，导致探测必然失败。COM 不可用时再退回 PowerShell。
-    fn query_explorer_path(hwnd: HWND) -> Option<PathBuf> {
-        if let Some(path) = com_explorer_path(hwnd) {
-            return Some(path);
-        }
-
-        powershell_explorer_path(hwnd)
     }
 
     /// 用进程内 Shell COM（ShellWindows + IWebBrowser2）按 HWND 取目录。
@@ -312,54 +295,6 @@ mod windows_impl {
         }
 
         None
-    }
-
-    /// 兜底：调用系统 PowerShell 查询目录。
-    fn powershell_explorer_path(hwnd: HWND) -> Option<PathBuf> {
-        // HWND 统一按 int64 比较：Automation 暴露的 HWND 可能是 32 位有符号数，
-        // 直接与 64 位句柄比较在部分系统上会漏匹配。
-        let script = format!(
-            "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; \
-             $target=[int64]{}; \
-             $w=(New-Object -ComObject Shell.Application).Windows() | \
-             Where-Object {{ try {{ [int64]$_.HWND -eq $target }} catch {{ $false }} }} | \
-             Select-Object -First 1; \
-             if($w){{ $w.Document.Folder.Self.Path }}",
-            hwnd as isize
-        );
-
-        let output = Command::new("powershell")
-            .args([
-                "-NoProfile",
-                "-NonInteractive",
-                "-WindowStyle",
-                "Hidden",
-                "-Command",
-                &script,
-            ])
-            .creation_flags(CREATE_NO_WINDOW)
-            .output()
-            .ok()?;
-
-        if !output.status.success() {
-            // 记录 stderr，便于判断是安全软件拦截还是语法/权限问题。
-            let stderr_text: String = String::from_utf8_lossy(&output.stderr).into_owned();
-            log::warn!(
-                "foreground: powershell exited with {:?}, stderr={}",
-                output.status.code(),
-                stderr_text.trim()
-            );
-            return None;
-        }
-
-        // PowerShell 可能带 BOM / 行尾空白。
-        let raw = String::from_utf8_lossy(&output.stdout);
-        let trimmed = raw.trim_matches(|ch: char| ch.is_whitespace() || ch == '\u{feff}');
-        if trimmed.is_empty() {
-            return None;
-        }
-
-        Some(PathBuf::from(trimmed))
     }
 
     /// 判断窗口所属进程是否为本进程（EcoPaste 自己）。
