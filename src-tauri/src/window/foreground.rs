@@ -1,8 +1,10 @@
 //! 前台窗口探测：判断用户触发粘贴时是否正对着文件资源管理器，并取它当前的目录。
 //!
 //! 背景：EcoPaste 的剪贴板窗口是「非激活面板」（macOS NSPanel nonactivating /
-//! Windows focusable=false），弹出时不会把前台焦点抢走，所以这里拿到的
-//! 前台窗口仍是用户原本正在操作的那个窗口，而不是 EcoPaste 自己。
+//! Windows focusable=false），正常情况下弹出时不会把前台焦点抢走。但搜索框聚焦
+//! （例如开启「打开时自动聚焦搜索框」，或用户先点搜索框再点条目）会让面板临时
+//! 变成前台窗口，此时必须回退到面板聚焦前记住的外部前台窗口，否则会被误判成
+//! 「不在资源管理器」并降级为粘贴路径。
 //!
 //! 平台实现：
 //! - Windows：`GetForegroundWindow` 确认进程是 `explorer.exe` 后，用系统自带的
@@ -34,31 +36,122 @@ pub fn explorer_directory() -> Option<PathBuf> {
     }
 }
 
+/// 记录当前前台窗口（仅当它不属于本进程）。
+///
+/// 在剪贴板窗口显示前、以及搜索框聚焦前调用，供后续粘贴时回退使用。
+#[cfg(target_os = "windows")]
+pub fn remember_external_foreground() {
+    windows_impl::remember_external_foreground();
+}
+
 /// Windows：前台进程是 explorer.exe 时，用 Shell.Application 取对应窗口的目录。
 #[cfg(target_os = "windows")]
 mod windows_impl {
+    use std::os::windows::ffi::OsStringExt;
     use std::os::windows::process::CommandExt;
     use std::path::PathBuf;
     use std::process::Command;
+    use std::sync::Mutex;
+
+    use winapi::shared::windef::HWND;
+    use winapi::um::processthreadsapi::{GetCurrentProcessId, OpenProcess};
+    use winapi::um::winbase::QueryFullProcessImageNameW;
+    use winapi::um::winnt::PROCESS_QUERY_LIMITED_INFORMATION;
+    use winapi::um::winuser::{GetForegroundWindow, GetWindowThreadProcessId, IsWindow};
 
     /// CREATE_NO_WINDOW：避免每次粘贴都闪出控制台窗口。
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
-    pub fn explorer_directory() -> Option<PathBuf> {
-        let hwnd = unsafe { winapi::um::winuser::GetForegroundWindow() };
+    /// 最近一次「非本进程」的前台窗口。
+    ///
+    /// 剪贴板窗口在搜索框聚焦时会临时变成可聚焦窗口并把焦点抢过来（例如开启了
+    /// 「打开时自动聚焦搜索框」，或用户先点搜索框再点条目）。此时直接读
+    /// `GetForegroundWindow` 只能拿到 EcoPaste 自己，会被误判成「不在资源管理器」，
+    /// 进而降级为粘贴路径。这里记住剪贴板窗口显示 / 聚焦之前的外部前台窗口作为兜底。
+    static LAST_EXTERNAL_FOREGROUND: Mutex<Option<isize>> = Mutex::new(None);
+
+    /// 记录当前前台窗口；仅当它不属于本进程时写入。
+    pub fn remember_external_foreground() {
+        let hwnd = unsafe { GetForegroundWindow() };
         if hwnd.is_null() {
-            return None;
+            return;
+        }
+        if is_own_process_window(hwnd) {
+            return;
         }
 
-        if !is_explorer_process(hwnd) {
-            return None;
+        let mut guard = match LAST_EXTERNAL_FOREGROUND.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        *guard = Some(hwnd as isize);
+    }
+
+    /// 返回前台资源管理器窗口当前打开的目录。
+    ///
+    /// 依次检查当前前台窗口、剪贴板窗口获得焦点前记住的外部窗口；
+    /// 第一个「属于 explorer.exe 且能取到目录」的候选即为粘贴目标。
+    pub fn explorer_directory() -> Option<PathBuf> {
+        let mut candidates: Vec<isize> = Vec::new();
+
+        let current = unsafe { GetForegroundWindow() };
+        if !current.is_null() {
+            candidates.push(current as isize);
         }
 
-        // 通过 HWND 精确定位对应的资源管理器窗口，避免多个窗口取错目录。
+        let remembered = match LAST_EXTERNAL_FOREGROUND.lock() {
+            Ok(guard) => *guard,
+            Err(poisoned) => *poisoned.into_inner(),
+        };
+        if let Some(value) = remembered {
+            if !candidates.contains(&value) {
+                candidates.push(value);
+            }
+        }
+
+        for value in candidates.iter().copied() {
+            let hwnd = value as HWND;
+
+            if unsafe { IsWindow(hwnd) } == 0 {
+                log::info!("foreground: candidate hwnd={value} is no longer valid");
+                continue;
+            }
+
+            if !is_explorer_process(hwnd) {
+                log::info!(
+                    "foreground: candidate hwnd={value} exe={:?} is not explorer.exe",
+                    process_exe_name(hwnd)
+                );
+                continue;
+            }
+
+            match query_explorer_path(hwnd) {
+                Some(path) => {
+                    log::info!(
+                        "foreground: resolved explorer directory {path:?} from hwnd={value}"
+                    );
+                    return Some(path);
+                }
+                None => {
+                    log::warn!("foreground: explorer hwnd={value} has no folder path");
+                }
+            }
+        }
+
+        log::warn!("foreground: no explorer directory found, candidates={candidates:?}");
+        None
+    }
+
+    /// 用 Shell.Application 按 HWND 精确查询资源管理器窗口的当前目录。
+    fn query_explorer_path(hwnd: HWND) -> Option<PathBuf> {
+        // HWND 统一按 int64 比较：Automation 暴露的 HWND 可能是 32 位有符号数，
+        // 直接与 64 位句柄比较在部分系统上会漏匹配。
         let script = format!(
             "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; \
+             $target=[int64]{}; \
              $w=(New-Object -ComObject Shell.Application).Windows() | \
-             Where-Object {{$_.HWND -eq {}}} | Select-Object -First 1; \
+             Where-Object {{ try {{ [int64]$_.HWND -eq $target }} catch {{ $false }} }} | \
+             Select-Object -First 1; \
              if($w){{ $w.Document.Folder.Self.Path }}",
             hwnd as isize
         );
@@ -94,15 +187,8 @@ mod windows_impl {
         Some(PathBuf::from(trimmed))
     }
 
-    /// 判断窗口所属进程是否为 explorer.exe。
-    fn is_explorer_process(hwnd: winapi::shared::windef::HWND) -> bool {
-        use std::os::windows::ffi::OsStringExt;
-
-        use winapi::um::processthreadsapi::OpenProcess;
-        use winapi::um::winbase::QueryFullProcessImageNameW;
-        use winapi::um::winnt::PROCESS_QUERY_LIMITED_INFORMATION;
-        use winapi::um::winuser::GetWindowThreadProcessId;
-
+    /// 判断窗口所属进程是否为本进程（EcoPaste 自己）。
+    fn is_own_process_window(hwnd: HWND) -> bool {
         let mut pid: u32 = 0;
         unsafe {
             GetWindowThreadProcessId(hwnd, &mut pid);
@@ -111,9 +197,22 @@ mod windows_impl {
             return false;
         }
 
+        pid == unsafe { GetCurrentProcessId() }
+    }
+
+    /// 取窗口所属进程的可执行文件名（小写）。
+    fn process_exe_name(hwnd: HWND) -> Option<String> {
+        let mut pid: u32 = 0;
+        unsafe {
+            GetWindowThreadProcessId(hwnd, &mut pid);
+        }
+        if pid == 0 {
+            return None;
+        }
+
         let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
         if handle.is_null() {
-            return false;
+            return None;
         }
 
         let mut buffer = [0u16; 512];
@@ -123,7 +222,7 @@ mod windows_impl {
             winapi::um::handleapi::CloseHandle(handle);
         }
         if ok == 0 {
-            return false;
+            return None;
         }
 
         let path = std::ffi::OsString::from_wide(&buffer[..size as usize]);
@@ -134,7 +233,12 @@ mod windows_impl {
             .unwrap_or_default()
             .to_ascii_lowercase();
 
-        name == "explorer.exe"
+        Some(name)
+    }
+
+    /// 判断窗口所属进程是否为 explorer.exe。
+    fn is_explorer_process(hwnd: HWND) -> bool {
+        process_exe_name(hwnd).as_deref() == Some("explorer.exe")
     }
 }
 
