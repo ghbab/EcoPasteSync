@@ -33,6 +33,9 @@ The app is designed to be fast, lightweight, and maintainable, with local storag
 - Organize history with favorites, pinned items, notes, custom groups, and configurable item actions.
 - Tune capture order, size limits, retention, display density, list sorting, and window behavior.
 - Export and import `.ecopastebak` backups, including encrypted backup containers.
+- Sync clipboard history across paired devices on the local network, with encrypted transport and per-device send/receive permissions.
+- Transfer synced files into the foreground Explorer or Finder folder when pasting, with conflict handling, progress reporting, and resumable jobs.
+- Paste synced file records as plain paths when a text input such as the address bar or search box has focus.
 - Keep clipboard data, resources, and settings local to your machine.
 
 ## Contributing

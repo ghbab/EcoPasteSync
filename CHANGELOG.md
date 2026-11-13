@@ -15,23 +15,9 @@
 * remove the transparent border around the file transfer and device pairing windows on Windows
 * fix the conflict list rendering as a transparent black area
 
-## [1.2.0-preview.1](https://github.com/EcoPasteHub/EcoPaste/compare/v1.2.0...v1.2.0-preview.1) (2026-11-12)
+### ⚠️ Testing Notice
 
-### ✨ Features
-
-* fetch large synced files on demand: files above the inline threshold stay path-only and transfer in 1 MB chunks only when pasted, with local caching and integrity verification
-
-### ⚠️ Upgrade Notice
-
-* remove the built-in auto updater and the "Check for Updates" entry; release builds no longer require updater signing keys
-
-## [1.2.0](https://github.com/EcoPasteHub/EcoPaste/compare/v1.1.0...v1.2.0) (2026-11-11)
-
-### ✨ Features
-
-* add LAN clipboard sync between paired devices (mDNS discovery, encrypted transport, per-device send/receive permissions, device blacklist)
-* add sync preferences with per-type switches for text, image, and file records
-* add Windows portable zip to release artifacts
+* Changes in this release were tested only on Windows x64 (64-bit); macOS and Windows ARM64 artifacts are untested.
 
 ## [1.1.0](https://github.com/EcoPasteHub/EcoPaste/compare/v1.0.0...v1.1.0) (2026-07-22)
 
