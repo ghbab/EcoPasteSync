@@ -47,6 +47,7 @@ pub fn remember_external_foreground() {
 /// Windows：前台进程是 explorer.exe 时，用 Shell.Application 取对应窗口的目录。
 #[cfg(target_os = "windows")]
 mod windows_impl {
+    use std::mem::ManuallyDrop;
     use std::os::windows::ffi::OsStringExt;
     use std::os::windows::process::CommandExt;
     use std::path::PathBuf;
@@ -64,7 +65,7 @@ mod windows_impl {
         CoCreateInstance, CoInitializeEx, CoUninitialize, IDispatch, CLSCTX_ALL,
         COINIT_APARTMENTTHREADED,
     };
-    use windows::Win32::System::Variant::{VARIANT, VARIANT_0_0, VT_I4};
+    use windows::Win32::System::Variant::{VARIANT, VARIANT_0, VARIANT_0_0, VARIANT_0_0_0, VT_I4};
     use windows::Win32::UI::Shell::{IShellWindows, IWebBrowser2, ShellWindows};
 
     /// CREATE_NO_WINDOW：避免每次粘贴都闪出控制台窗口。
@@ -209,13 +210,22 @@ mod windows_impl {
             };
 
             for index in 0..count {
-                // ShellWindows.Item 接受 VARIANT 形式的索引，这里手工构造 VT_I4。
-                // 不能用 VARIANT::from：该类型没有 From<i32> 实现。
-                let mut variant: VARIANT = VARIANT::default();
-                // ManuallyDrop 不会自动 DerefMut，必须显式解引用后写入字段。
-                let inner: &mut VARIANT_0_0 = &mut *variant.Anonymous.Anonymous;
-                inner.vt = VT_I4;
-                inner.Anonymous.lVal = index;
+                // ShellWindows.Item 接受 VARIANT 形式的索引，这里直接构造 VT_I4 变体。
+                // 不能用 VARIANT::from：该类型没有 From<i32> 实现；也不能对
+                // ManuallyDrop 包裹的联合体字段直接赋值（不会自动 DerefMut）。
+                let payload: VARIANT_0_0_0 = VARIANT_0_0_0 { lVal: index };
+                let value: VARIANT_0_0 = VARIANT_0_0 {
+                    vt: VT_I4,
+                    wReserved1: 0,
+                    wReserved2: 0,
+                    wReserved3: 0,
+                    Anonymous: payload,
+                };
+                let variant: VARIANT = VARIANT {
+                    Anonymous: VARIANT_0 {
+                        Anonymous: ManuallyDrop::new(value),
+                    },
+                };
 
                 let dispatch: IDispatch = match shell_windows.Item(variant) {
                     Ok(value) => value,
