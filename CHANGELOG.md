@@ -7,7 +7,7 @@
 * add LAN clipboard sync with device pairing, per-device send/receive permissions and encrypted transport
 * paste synced files into the foreground Explorer / Finder directory, with conflict handling, a progress window and resumable transfer jobs
 * paste file records as plain paths when a text input (address bar, search box) has focus
-* unify release artifact naming as `EcoPasteSync_<tag>_<platform>_<arch>`; Windows now ships a portable zip only
+* unify release artifact naming as `EcoPasteSync_<tag>_<platform>_<arch>`; Windows now ships a single-file zip only
 
 ### 🐛 Bug Fixes
 
