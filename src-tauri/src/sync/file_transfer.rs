@@ -387,6 +387,9 @@ pub async fn cancel(app: &AppHandle, job_id: &str) -> Result<()> {
     // 已结束的任务直接删除记录即可；运行中的任务由 worker 在检查点自行退出。
     let pool = devices::pool(app).await;
     let Some(job) = transfer_jobs::find(&pool, job_id).await? else {
+        // 任务已从 journal 删除（正常结束）但内存快照可能还在：
+        // 广播取消让没收到结束事件的窗口可以正常收起，避免按钮点击毫无反馈。
+        set_snapshot_status(app, job_id, STATUS_CANCELLED, None);
         return Ok(());
     };
 
@@ -878,6 +881,7 @@ async fn run_job(app: AppHandle, job_id: String) {
     if let Err(err) = transfer_jobs::set_status(&pool, &job_id, STATUS_RUNNING).await {
         log::warn!("sync transfer: mark job running failed: {err}");
     }
+    mark_latest_job(&job_id);
     set_snapshot_status(&app, &job_id, STATUS_RUNNING, None);
 
     let shared_key = match load_shared_key(&app, &job.device_id).await {
@@ -932,10 +936,31 @@ async fn run_job(app: AppHandle, job_id: String) {
 
         file_index += 1;
 
+        // 切换文件时先广播一次文件名与序号：多文件任务里网络文件之间的间隔
+        // 或整批本地复用文件都不会产生分块事件，窗口会一直停在旧进度上。
+        update_snapshot_progress(
+            &app,
+            &job_id,
+            &final_path,
+            file_index,
+            file_count,
+            transferred,
+            0,
+        );
+
         // 目标与来源完全相同时跳过（把文件粘贴回它所在目录）。
         if files[position].from_local && files[position].source == final_path {
             transferred = transferred.saturating_add(files[position].size);
             files[position].done = files[position].size;
+            update_snapshot_progress(
+                &app,
+                &job_id,
+                &final_path,
+                file_index,
+                file_count,
+                transferred,
+                0,
+            );
             continue;
         }
 
@@ -985,6 +1010,17 @@ async fn run_job(app: AppHandle, job_id: String) {
 
         transferred = transferred.saturating_add(files[position].size);
         files[position].done = files[position].size;
+
+        // 本文件完成立即刷新：本地复用文件不产生分块事件，依赖这一步推进进度条。
+        update_snapshot_progress(
+            &app,
+            &job_id,
+            &final_path,
+            file_index,
+            file_count,
+            transferred,
+            speed_bps,
+        );
 
         // 每个文件完成都落一次 journal，续传粒度足够细。
         if let Err(err) = transfer_jobs::update_progress(&pool, &job_id, transferred, &files).await
@@ -1485,14 +1521,19 @@ async fn remote_content_of(app: &AppHandle, item_id: &str) -> Result<String> {
 
 // ---- 状态快照与事件 ----
 
-/// 写入内存快照并广播。
+/// 写入内存快照（不改变「最近任务」指针）。
 fn store_snapshot(snapshot: &TransferSnapshot) {
-    {
-        let mut latest = LATEST_JOB.lock().expect("transfer latest job poisoned");
-        *latest = Some(snapshot.job_id.clone());
-    }
     let mut snapshots = SNAPSHOTS.lock().expect("transfer snapshots poisoned");
     snapshots.insert(snapshot.job_id.clone(), snapshot.clone());
+}
+
+/// 把任务标记为窗口应展示的最近任务。
+///
+/// 只在任务真正开始执行时调用：排队中的任务不应抢走窗口内容，
+/// 否则前一任务的进度会被后一任务的排队快照覆盖，看起来像进度停住。
+fn mark_latest_job(job_id: &str) {
+    let mut latest = LATEST_JOB.lock().expect("transfer latest job poisoned");
+    *latest = Some(job_id.to_owned());
 }
 
 /// 广播快照。
