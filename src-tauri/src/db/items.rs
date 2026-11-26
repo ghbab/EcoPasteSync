@@ -63,20 +63,19 @@ fn kind_tag(kind: ClipboardKind) -> &'static str {
     }
 }
 
-/// 把指定内容哈希的 files 条目提到列表最前（更新创建时间与更新时间）。
+/// 刷新指定内容哈希的 files 条目的使用时间（不修改创建时间）。
 ///
-/// 对端重复复制同一批文件时会发来置顶通知；本地没有该条目时返回 `None`，
-/// 属于正常情况（例如条目已被用户清理）。
+/// 旧版本对端重复复制同一批文件时仍会发来置顶通知；这里只刷新 `updated_at`，
+/// 保证「按创建时间」排序不会被破坏，也不会把条目强行插到创建时间最前。
 pub async fn bump_files_item(pool: &SqlitePool, content_hash: &str) -> Result<Option<String>> {
     let now = Utc::now();
     let row = sqlx::query_as::<_, (String,)>(
-        "UPDATE clipboard_items SET created_at = ?, updated_at = ? \
+        "UPDATE clipboard_items SET updated_at = ? \
          WHERE id = (SELECT id FROM clipboard_items \
                      WHERE content_hash = ? AND kind = 'files' \
                      ORDER BY created_at DESC LIMIT 1) \
          RETURNING id",
     )
-    .bind(now)
     .bind(now)
     .bind(content_hash)
     .fetch_optional(pool)
