@@ -17,6 +17,7 @@
     "completed": "传输完成",
     "conflictsHint": "目标位置已有同名文件，请选择处理方式；默认保留两者。",
     "conflictsTitle": "存在同名文件（{{count}} 项）",
+    "conflictsToggleHint": "开关打开表示覆盖本地同名文件；关闭表示保留两者，并为传入文件自动改名。调整后点「逐项选择」生效。",
     "copyPathsOnly": "仅复制路径",
     "custom": "逐项选择",
     "failed": "传输失败",

@@ -1575,7 +1575,7 @@ export const refreshSyncDevices = () => {
 export interface FileTransferSnapshot {
   jobId: string;
   itemId: string;
-  /** queued / running / paused / failed / done / cancelled / conflicts */
+  /** queued / running / paused / failed / done / cancelled / conflicts / skipped */
   status: string;
   targetDir: string;
   fileName: string | null;

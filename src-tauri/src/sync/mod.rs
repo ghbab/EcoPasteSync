@@ -1002,9 +1002,10 @@ pub async fn maybe_broadcast_item(app: &AppHandle, item: &ClipboardItem) {
     }
 }
 
-/// 重复复制同一批文件时调用：通知对端把相同的 files 条目录置顶。
+/// 重复复制相同内容时调用：通知对端把同一条目录置顶。
 ///
 /// 本机去重只更新复制时间，不产生新条目；对端如果什么都不做，两端顺序会不一致。
+/// 文本、图片、文件都走这条路径，与完整推送一致按类型开关过滤。
 /// 若对端没有该条目（例如它清空过历史），bump 会返回未命中，此时改用完整推送
 /// 把条目补过去，保证两端都有这条记录且顺序一致。
 pub async fn broadcast_item_bump(app: &AppHandle, item: &ClipboardItem) {
@@ -1016,7 +1017,17 @@ pub async fn broadcast_item_bump(app: &AppHandle, item: &ClipboardItem) {
     }
 
     let settings = app.state::<SettingsStore>().snapshot();
-    if !settings.sync.enabled || !settings.sync.sync_files {
+    if !settings.sync.enabled {
+        return;
+    }
+
+    // 与 maybe_broadcast_item 保持一致：按本机类型开关过滤。
+    let allowed = match item.kind {
+        ClipboardKind::Text => settings.sync.sync_text,
+        ClipboardKind::Image => settings.sync.sync_image,
+        ClipboardKind::Files => settings.sync.sync_files,
+    };
+    if !allowed {
         return;
     }
 
@@ -1035,8 +1046,8 @@ pub async fn broadcast_item_bump(app: &AppHandle, item: &ClipboardItem) {
         megabytes_to_bytes(settings.sync.file_threshold),
         megabytes_to_bytes(settings.sync.file_max_size),
     );
-    if item.sync_source_device_id.is_none() {
-        // 本机真实共享出去的路径需要登记，供对端按需拉取时校验。
+    if item.kind == ClipboardKind::Files && item.sync_source_device_id.is_none() {
+        // 只登记本机真实共享出去的路径（含目录内文件），供对端按需拉取时校验。
         manager.remember_shared_paths(&collect_shared_paths(&item.content));
     }
 

@@ -24,6 +24,8 @@ import { log } from "@/utils/log";
 
 /** 完成后停留时间：先让用户看到「已完成」，再自动关闭窗口。 */
 const AUTO_CLOSE_DELAY_MS = 1500;
+/** 首帧拉不到任务快照时的兜底关闭时间：避免窗口空白悬浮、无法关闭。 */
+const EMPTY_SNAPSHOT_CLOSE_MS = 3000;
 
 /**
  * 局域网文件传输进度窗口。
@@ -36,15 +38,35 @@ const FileTransfer: FC = () => {
   const [snapshot, setSnapshot] = useState<FileTransferSnapshot | null>(null);
   const [selectedOverwrite, setSelectedOverwrite] = useState<string[]>([]);
   const closeTimerRef = useRef<number | null>(null);
+  const emptyTimerRef = useRef<number | null>(null);
+  const snapshotRef = useRef<FileTransferSnapshot | null>(null);
+  const activeJobIdRef = useRef<string | null>(null);
 
   useMount(async () => {
     try {
       const latest = await getLatestFileTransfer();
-      if (latest !== null) {
-        setSnapshot(latest);
+      if (latest === null) {
+        // 任务可能刚刚入队、进度事件尚未到达；给一个短兜底，避免空白窗口永久停留。
+        scheduleEmptyClose();
+        return;
+      }
+
+      // 全部冲突被跳过的任务无需展示进度，直接收起窗口。
+      if (latest.status === "skipped") {
+        void closeWindow();
+        return;
+      }
+
+      applySnapshot(latest);
+
+      // 首帧才加载页面时，任务可能已经结束且事件已错过：
+      // 与事件路径保持一致，结束态必须自动收起窗口，否则按钮点击也无任务可操作。
+      if (latest.done) {
+        scheduleClose();
       }
     } catch {
       // 命令层已统一提示；没有任务时窗口保持空白背景。
+      scheduleEmptyClose();
     }
   });
 
@@ -53,13 +75,36 @@ const FileTransfer: FC = () => {
       window.clearTimeout(closeTimerRef.current);
       closeTimerRef.current = null;
     }
+
+    if (emptyTimerRef.current !== null) {
+      window.clearTimeout(emptyTimerRef.current);
+      emptyTimerRef.current = null;
+    }
   });
 
   useTauriListen<FileTransferSnapshot>(
     TAURI_EVENT.SYNC_FILE_PROGRESS,
     (event) => {
       const next = event.payload;
-      setSnapshot(next);
+
+      // 全部冲突被跳过、没有实际待传文件时，窗口立即收起，不显示进度条。
+      if (next.status === "skipped") {
+        void closeWindow();
+        return;
+      }
+
+      // 收到任何任务快照说明窗口已有内容，取消空白兜底。
+      cancelEmptyClose();
+
+      const applied = applySnapshot(next);
+      if (!applied) {
+        return;
+      }
+
+      // 队列中还有后续任务：新任务的进度会继续复用窗口，先撤销上一个任务的自动关闭。
+      if (!next.done && next.status !== "cancelled") {
+        cancelScheduledClose();
+      }
 
       // 同一任务结束后自动收起窗口；失败态保留，等待用户处理。
       if (next.done || next.status === "cancelled") {
@@ -67,6 +112,33 @@ const FileTransfer: FC = () => {
       }
     },
   );
+
+  /**
+   * 写入窗口快照。
+   *
+   * 多个任务连续粘贴时，排队任务的初始快照不应覆盖正在传输的任务，
+   * 否则进度会在两个任务之间来回跳，看起来像停住不动。
+   */
+  function applySnapshot(next: FileTransferSnapshot): boolean {
+    const activeJobId = activeJobIdRef.current;
+    const current = snapshotRef.current;
+    const isAnotherJob = activeJobId !== null && activeJobId !== next.jobId;
+
+    // 当前任务尚未结束时的排队快照只代表「等待」，直接忽略。
+    if (
+      isAnotherJob &&
+      current !== null &&
+      !current.done &&
+      next.status === "queued"
+    ) {
+      return false;
+    }
+
+    activeJobIdRef.current = next.jobId;
+    snapshotRef.current = next;
+    setSnapshot(next);
+    return true;
+  }
 
   /** 结束后延迟关闭窗口。 */
   function scheduleClose() {
@@ -77,6 +149,35 @@ const FileTransfer: FC = () => {
       closeTimerRef.current = null;
       void closeWindow();
     }, AUTO_CLOSE_DELAY_MS);
+  }
+
+  /** 撤销待执行的自动关闭。 */
+  function cancelScheduledClose() {
+    if (closeTimerRef.current === null) {
+      return;
+    }
+    window.clearTimeout(closeTimerRef.current);
+    closeTimerRef.current = null;
+  }
+
+  /** 首帧没有快照时启动兜底关闭。 */
+  function scheduleEmptyClose() {
+    if (emptyTimerRef.current !== null) {
+      return;
+    }
+    emptyTimerRef.current = window.setTimeout(() => {
+      emptyTimerRef.current = null;
+      void closeWindow();
+    }, EMPTY_SNAPSHOT_CLOSE_MS);
+  }
+
+  /** 取消空白兜底关闭。 */
+  function cancelEmptyClose() {
+    if (emptyTimerRef.current === null) {
+      return;
+    }
+    window.clearTimeout(emptyTimerRef.current);
+    emptyTimerRef.current = null;
   }
 
   /** 隐藏窗口（由生命周期策略在空闲后销毁）。 */
@@ -195,6 +296,31 @@ const FileTransfer: FC = () => {
     }
   };
 
+  /**
+   * 关闭窗口：任务仍在进行时先通知后端取消（后台清理临时文件），
+   * 让窗口始终可以被用户直接收起，不再依赖任务状态是否还能响应。
+   */
+  function handleClose() {
+    cancelScheduledClose();
+    cancelEmptyClose();
+
+    const current = snapshot;
+    void closeWindow();
+
+    if (current !== null && !current.done) {
+      void cancelTransferSilently(current.jobId);
+    }
+  }
+
+  /** 后台取消传输；窗口已经收起，不再向上层报告错误。 */
+  async function cancelTransferSilently(jobId: string) {
+    try {
+      await cancelFileTransfer(jobId);
+    } catch {
+      // 命令层已统一提示；窗口已收起，失败不影响继续使用。
+    }
+  }
+
   const toggleOverwrite = (path: string, checked: boolean) => {
     setSelectedOverwrite((current) => {
       if (checked) {
@@ -243,14 +369,25 @@ const FileTransfer: FC = () => {
             {t("fileTransfer.title")}
           </span>
 
-          <button
-            aria-label="minimize"
-            className="cursor-pointer border-none bg-transparent px-2 text-ant-secondary text-base leading-none hover:text-ant-text"
-            onClick={handleMinimize}
-            type="button"
-          >
-            —
-          </button>
+          <div className="flex items-center">
+            <button
+              aria-label="minimize"
+              className="cursor-pointer border-none bg-transparent px-2 text-ant-secondary text-base leading-none hover:text-ant-text"
+              onClick={handleMinimize}
+              type="button"
+            >
+              —
+            </button>
+
+            <button
+              aria-label="close"
+              className="cursor-pointer border-none bg-transparent px-2 text-ant-secondary text-base leading-none hover:text-ant-text"
+              onClick={handleClose}
+              type="button"
+            >
+              ×
+            </button>
+          </div>
         </div>
 
         <div className="flex min-h-0 flex-1 flex-col gap-2 px-4 pb-2">
@@ -260,6 +397,10 @@ const FileTransfer: FC = () => {
             <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-hidden">
               <span className="text-ant-secondary text-xs">
                 {t("fileTransfer.conflictsHint")}
+              </span>
+
+              <span className="text-ant-secondary text-xs">
+                {t("fileTransfer.conflictsToggleHint")}
               </span>
 
               {/* 背景必须用已注册的 antd 颜色 token：bg-ant-base 在 antd v6 下没有对应变量，

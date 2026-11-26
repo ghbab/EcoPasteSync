@@ -28,7 +28,7 @@ use super::source::{self, FrontmostApp};
 use super::storage::ImageStore;
 use crate::db::apps::upsert_app;
 use crate::db::items::{upsert_item, UpsertResult};
-use crate::db::models::{ClipboardApp, ClipboardItem, ClipboardKind};
+use crate::db::models::{ClipboardApp, ClipboardItem};
 use crate::settings::SettingsStore;
 
 /// 剪贴板更新事件名。前端监听此事件后增量刷新 / 重新拉取列表。
@@ -154,11 +154,11 @@ pub async fn persist_and_notify(
     }
 
     // 新条目（非去重命中）才向局域网已配对设备推送；同步接收路径不经过本函数，无回环。
+    // 去重命中时本机只刷新使用时间，需要通知对端把同一条目录置顶；
+    // 文本、图片、文件等所有类型行为统一，保持一致的两端顺序。
     if !result.deduplicated {
         crate::sync::maybe_broadcast_item(app, &item_to_write).await;
-    } else if item_to_write.kind == ClipboardKind::Files {
-        // 重复复制同一批文件：本机只刷新了复制时间，需要让对端也把条目录置顶；
-        // 对端没有该条目时会自动补推完整内容。
+    } else {
         crate::sync::broadcast_item_bump(app, &item_to_write).await;
     }
 
