@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.1.0.2](https://github.com/ghbab/EcoPasteSync/compare/v1.1.0.1...v1.1.0.2) (2026-11-26)
+
+### 🐛 Bug Fixes
+
+* prevent the file transfer window from getting stuck after a transfer finishes; add a close button that also cancels the running transfer
+* keep the transfer progress moving for multi-file jobs, local file reuse, and queued transfers
+* make cancelling an already finished transfer close the window instead of leaving it unresponsive
+* notify paired devices to bump the record when the same text, image, or file is copied again, matching the existing file behavior
+
+### ⚠️ Testing Notice
+
+* Changes in this release were tested only on Windows x64 (64-bit); macOS and Windows ARM64 artifacts are untested.
+
 ## [1.1.0.1](https://github.com/ghbab/EcoPasteSync/compare/v1.1.0...v1.1.0.1) (2026-11-13)
 
 ### ✨ Features
