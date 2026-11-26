@@ -154,9 +154,12 @@ pub async fn persist_and_notify(
     }
 
     // 新条目（非去重命中）才向局域网已配对设备推送；同步接收路径不经过本函数，无回环。
-    // 去重命中时与文本等其它类型保持一致：只刷新本机使用时间，不让对端置顶或移动条目。
+    // 去重命中时本机只刷新使用时间，需要通知对端把同一条目录置顶；
+    // 文本、图片、文件等所有类型行为统一，保持一致的两端顺序。
     if !result.deduplicated {
         crate::sync::maybe_broadcast_item(app, &item_to_write).await;
+    } else {
+        crate::sync::broadcast_item_bump(app, &item_to_write).await;
     }
 
     Ok(result)

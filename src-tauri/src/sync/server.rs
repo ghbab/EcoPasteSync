@@ -360,12 +360,12 @@ async fn handle_bump(
     }
 
     let pool = ctx.app.state::<crate::db::DatabaseState>().pool().await;
-    let hit = match crate::db::items::bump_files_item(&pool, &content_hash).await {
-        Ok(Some(id)) => {
-            // 前端按事件刷新列表，顺序变化立刻可见。
+    let hit = match crate::db::items::bump_item(&pool, &content_hash).await {
+        Ok(Some((id, kind))) => {
+            // 前端按事件刷新列表，顺序变化立刻可见；kind 决定刷新哪个分组。
             if let Err(err) = ctx.app.emit(
                 "clipboard://updated",
-                json!({ "id": id, "kind": "files", "deduplicated": true }),
+                json!({ "id": id, "kind": kind, "deduplicated": true }),
             ) {
                 log::warn!("sync bump: emit clipboard update failed: {err}");
             }
@@ -373,7 +373,7 @@ async fn handle_bump(
         }
         Ok(None) => {
             // 本机没有该条目：回传 hit=false，发起端会改用完整推送把条目补过来。
-            log::info!("sync bump: no local files item with hash {content_hash}");
+            log::info!("sync bump: no local item with hash {content_hash}");
             false
         }
         Err(err) => {

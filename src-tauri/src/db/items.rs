@@ -63,26 +63,30 @@ fn kind_tag(kind: ClipboardKind) -> &'static str {
     }
 }
 
-/// 刷新指定内容哈希的 files 条目的使用时间（不修改创建时间）。
+/// 把指定内容哈希的剪贴板条目提到列表最前（更新创建时间与更新时间）。
 ///
-/// 旧版本对端重复复制同一批文件时仍会发来置顶通知；这里只刷新 `updated_at`，
-/// 保证「按创建时间」排序不会被破坏，也不会把条目强行插到创建时间最前。
-pub async fn bump_files_item(pool: &SqlitePool, content_hash: &str) -> Result<Option<String>> {
+/// 重复复制相同内容时本机只做去重，顺序不会变化；对端收到置顶通知后
+/// 通过这里刷新同一条目的创建时间，保证两端顺序一致。文本、图片、文件通用。
+/// 本地没有该条目时返回 `None`，属于正常情况（例如条目已被用户清理）。
+pub async fn bump_item(pool: &SqlitePool, content_hash: &str) -> Result<Option<(String, String)>> {
     let now = Utc::now();
-    let row = sqlx::query_as::<_, (String,)>(
-        "UPDATE clipboard_items SET updated_at = ? \
+    // 同时刷新 created_at 与 updated_at：按创建时间或使用时间排序都能置顶。
+    // 返回 kind 供前端按当前分组决定是否刷新列表。
+    let row = sqlx::query_as::<_, (String, String)>(
+        "UPDATE clipboard_items SET created_at = ?, updated_at = ? \
          WHERE id = (SELECT id FROM clipboard_items \
-                     WHERE content_hash = ? AND kind = 'files' \
+                     WHERE content_hash = ? \
                      ORDER BY created_at DESC LIMIT 1) \
-         RETURNING id",
+         RETURNING id, kind",
     )
+    .bind(now)
     .bind(now)
     .bind(content_hash)
     .fetch_optional(pool)
     .await
     .context("failed to bump clipboard item")?;
 
-    Ok(row.map(|(id,)| id))
+    Ok(row)
 }
 
 /// 入库主入口：按 `item.content_hash` 去重。
