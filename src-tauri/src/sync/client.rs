@@ -13,8 +13,8 @@ use crate::sync::devices::{self, SyncDeviceRecord};
 use crate::sync::protocol::{
     file_chunk_signature_target, pull_signature_target, DeviceInfoDto, NearbyDeviceDto,
     PairAcceptedDto, PairRequestDto, PairStatusDto, SyncClipboardItemDto, API_CLIPBOARD_PULL,
-    API_CLIPBOARD_PUSH, API_FILE_CHUNK, API_IMAGE, API_INFO, API_PAIR, API_PAIR_STATUS,
-    API_VERIFY, HEADER_DEVICE_ID, HEADER_SIGNATURE, HEADER_TIMESTAMP,
+    API_CLIPBOARD_PUSH, API_FILE_CHUNK, API_IMAGE, API_INFO, API_PAIR, API_PAIR_STATUS, API_VERIFY,
+    HEADER_DEVICE_ID, HEADER_SIGNATURE, HEADER_TIMESTAMP,
 };
 use crate::sync::{emit_pair_result, emit_pair_sas, NearbyEntry, SyncManager};
 

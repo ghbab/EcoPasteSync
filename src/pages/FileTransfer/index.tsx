@@ -125,7 +125,12 @@ const FileTransfer: FC = () => {
     const isAnotherJob = activeJobId !== null && activeJobId !== next.jobId;
 
     // 当前任务尚未结束时的排队快照只代表「等待」，直接忽略。
-    if (isAnotherJob && current !== null && !current.done && next.status === "queued") {
+    if (
+      isAnotherJob &&
+      current !== null &&
+      !current.done &&
+      next.status === "queued"
+    ) {
       return false;
     }
 
